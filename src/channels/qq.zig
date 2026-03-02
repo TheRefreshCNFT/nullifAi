@@ -4,6 +4,7 @@ const root = @import("root.zig");
 const config_types = @import("../config_types.zig");
 const bus = @import("../bus.zig");
 const websocket = @import("../websocket.zig");
+const Atomic = @import("../portable_atomic.zig").Atomic;
 
 const log = std.log.scoped(.qq);
 
@@ -721,7 +722,7 @@ pub const QQChannel = struct {
     event_bus: ?*bus.Bus,
     dedup_set: StringDedupSet = .{},
     dedup_allocator: std.mem.Allocator,
-    sequence: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    sequence: Atomic(i64) = Atomic(i64).init(0),
     has_sequence: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     heartbeat_interval_ms: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     session_id: ?[]const u8,
