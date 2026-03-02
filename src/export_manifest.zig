@@ -6,17 +6,26 @@
 const std = @import("std");
 const onboard = @import("onboard.zig");
 const channel_catalog = @import("channel_catalog.zig");
+const memory_root = @import("memory/root.zig");
 const version = @import("version.zig");
 
-pub fn run() !void {
-    var buf: [65536]u8 = undefined;
-    var bw = std.fs.File.stdout().writer(&buf);
-    const out = &bw.interface;
+fn writeOption(out: *std.Io.Writer, value: []const u8, label: []const u8) !void {
+    try out.print("          {{ \"value\": {f}, \"label\": {f} }}", .{
+        std.json.fmt(value, .{}),
+        std.json.fmt(label, .{}),
+    });
+}
 
+pub fn writeManifest(out: *std.Io.Writer) !void {
     // ── Top-level fields ─────────────────────────────────────────────
     try out.writeAll(
         \\{
         \\  "schema_version": 1,
+        \\  "version":
+    );
+    try out.print("{f}", .{std.json.fmt(version.string, .{})});
+    try out.writeAll(
+        \\,
         \\  "name": "nullclaw",
         \\  "display_name": "NullClaw",
         \\  "description": "Autonomous AI agent runtime",
@@ -78,13 +87,13 @@ pub fn run() !void {
         \\
     );
     for (onboard.known_providers, 0..) |p, i| {
-        try out.writeAll("          { \"value\": \"");
-        try out.writeAll(p.key);
-        try out.writeAll("\", \"label\": \"");
-        try out.writeAll(p.label);
-        try out.writeAll("\", \"description\": \"Default model: ");
-        try out.writeAll(p.default_model);
-        try out.writeAll("\" }");
+        var desc_buf: [512]u8 = undefined;
+        const description = std.fmt.bufPrint(&desc_buf, "Default model: {s}", .{p.default_model}) catch "Default model";
+        try out.print("          {{ \"value\": {f}, \"label\": {f}, \"description\": {f} }}", .{
+            std.json.fmt(p.key, .{}),
+            std.json.fmt(p.label, .{}),
+            std.json.fmt(description, .{}),
+        });
         if (i < onboard.known_providers.len - 1) {
             try out.writeAll(",");
         }
@@ -133,17 +142,14 @@ pub fn run() !void {
         \\        "options": [
         \\
     );
-    for (onboard.wizard_memory_backend_order, 0..) |name, i| {
-        try out.writeAll("          { \"value\": \"");
-        try out.writeAll(name);
-        try out.writeAll("\", \"label\": \"");
-        try out.writeAll(name);
-        try out.writeAll("\" }");
-        if (i < onboard.wizard_memory_backend_order.len - 1) {
-            try out.writeAll(",");
-        }
-        try out.writeAll("\n");
+    var wrote_memory = false;
+    for (onboard.wizard_memory_backend_order) |name| {
+        if (memory_root.findBackend(name) == null) continue;
+        if (wrote_memory) try out.writeAll(",\n");
+        try writeOption(out, name, name);
+        wrote_memory = true;
     }
+    if (wrote_memory) try out.writeAll("\n");
     try out.writeAll(
         \\        ]
         \\      },
@@ -162,11 +168,7 @@ pub fn run() !void {
         \\
     );
     for (onboard.tunnel_options, 0..) |name, i| {
-        try out.writeAll("          { \"value\": \"");
-        try out.writeAll(name);
-        try out.writeAll("\", \"label\": \"");
-        try out.writeAll(name);
-        try out.writeAll("\" }");
+        try writeOption(out, name, name);
         if (i < onboard.tunnel_options.len - 1) {
             try out.writeAll(",");
         }
@@ -190,11 +192,7 @@ pub fn run() !void {
         \\
     );
     for (onboard.autonomy_options, 0..) |name, i| {
-        try out.writeAll("          { \"value\": \"");
-        try out.writeAll(name);
-        try out.writeAll("\", \"label\": \"");
-        try out.writeAll(name);
-        try out.writeAll("\" }");
+        try writeOption(out, name, name);
         if (i < onboard.autonomy_options.len - 1) {
             try out.writeAll(",");
         }
@@ -211,23 +209,22 @@ pub fn run() !void {
         \\      {
         \\        "id": "channels",
         \\        "title": "Channels",
-        \\        "description": "Messaging channels to enable",
+        \\        "description": "Messaging channels to enable (non-interactive: webhook only)",
         \\        "type": "multi_select",
         \\        "required": false,
         \\        "options": [
         \\
     );
-    for (channel_catalog.known_channels, 0..) |ch, i| {
-        try out.writeAll("          { \"value\": \"");
-        try out.writeAll(ch.key);
-        try out.writeAll("\", \"label\": \"");
-        try out.writeAll(ch.label);
-        try out.writeAll("\" }");
-        if (i < channel_catalog.known_channels.len - 1) {
-            try out.writeAll(",");
-        }
-        try out.writeAll("\n");
+    var wrote_channel = false;
+    for (channel_catalog.known_channels) |ch| {
+        if (!channel_catalog.isBuildEnabled(ch.id)) continue;
+        if (!onboard.isWizardInteractiveChannel(ch.id)) continue;
+        if (ch.id != .webhook) continue;
+        if (wrote_channel) try out.writeAll(",\n");
+        try writeOption(out, ch.key, ch.label);
+        wrote_channel = true;
     }
+    if (wrote_channel) try out.writeAll("\n");
     try out.writeAll(
         \\        ]
         \\      },
@@ -262,21 +259,61 @@ pub fn run() !void {
         \\}
         \\
     );
+}
 
+pub fn run() !void {
+    var buf: [65536]u8 = undefined;
+    var bw = std.fs.File.stdout().writer(&buf);
+    try writeManifest(&bw.interface);
     try bw.interface.flush();
 }
 
-test "export_manifest produces valid structure" {
-    // Verify the data sources are accessible and have expected counts
-    try std.testing.expect(onboard.known_providers.len >= 29);
-    try std.testing.expect(onboard.wizard_memory_backend_order.len == 9);
-    try std.testing.expect(onboard.tunnel_options.len == 4);
-    try std.testing.expect(onboard.autonomy_options.len == 3);
-    try std.testing.expect(channel_catalog.known_channels.len >= 20);
+fn findStepOptions(steps: std.json.Array, step_id: []const u8) ?std.json.Array {
+    for (steps.items) |step| {
+        if (step != .object) continue;
+        const id_val = step.object.get("id") orelse continue;
+        if (id_val != .string) continue;
+        if (!std.mem.eql(u8, id_val.string, step_id)) continue;
+        const options_val = step.object.get("options") orelse return null;
+        if (options_val != .array) return null;
+        return options_val.array;
+    }
+    return null;
+}
 
-    // Verify first provider
-    try std.testing.expectEqualStrings("openrouter", onboard.known_providers[0].key);
+test "export_manifest produces valid structure and filtered options" {
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeManifest(&aw.writer);
+    const rendered = aw.writer.buffer[0..aw.writer.end];
 
-    // Verify memory backends start with sqlite
-    try std.testing.expectEqualStrings("sqlite", onboard.wizard_memory_backend_order[0]);
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, rendered, .{});
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .object);
+
+    const root = parsed.value.object;
+    const version_val = root.get("version") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(version_val == .string);
+    try std.testing.expectEqualStrings(version.string, version_val.string);
+
+    const wizard_val = root.get("wizard") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(wizard_val == .object);
+    const steps_val = wizard_val.object.get("steps") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(steps_val == .array);
+
+    const memory_options = findStepOptions(steps_val.array, "memory") orelse return error.TestUnexpectedResult;
+    for (memory_options.items) |entry| {
+        try std.testing.expect(entry == .object);
+        const value = entry.object.get("value") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(value == .string);
+        try std.testing.expect(memory_root.findBackend(value.string) != null);
+    }
+
+    const channel_options = findStepOptions(steps_val.array, "channels") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(channel_options.items.len == 1);
+    const channel_entry = channel_options.items[0];
+    try std.testing.expect(channel_entry == .object);
+    const channel_value = channel_entry.object.get("value") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(channel_value == .string);
+    try std.testing.expectEqualStrings("webhook", channel_value.string);
 }

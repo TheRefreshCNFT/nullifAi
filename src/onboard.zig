@@ -808,7 +808,7 @@ pub fn memoryProfileForBackend(backend: []const u8) []const u8 {
     return "custom";
 }
 
-fn isWizardInteractiveChannel(channel_id: channel_catalog.ChannelId) bool {
+pub fn isWizardInteractiveChannel(channel_id: channel_catalog.ChannelId) bool {
     return switch (channel_id) {
         .telegram, .discord, .slack, .webhook, .mattermost, .matrix, .signal, .nostr => true,
         else => false,
