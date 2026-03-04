@@ -288,6 +288,10 @@ pub const Agent = struct {
     compaction_max_summary_chars: u32 = compaction.DEFAULT_COMPACTION_MAX_SUMMARY_CHARS,
     compaction_max_source_chars: u32 = compaction.DEFAULT_COMPACTION_MAX_SOURCE_CHARS,
 
+    /// Per-turn MCP tool filter groups (slice into config-owned memory; not freed by Agent).
+    /// Empty = no filtering; all tool specs are sent as-is.
+    tool_filter_groups: []const config_types.ToolFilterGroup = &.{},
+
     /// Optional security policy for autonomy checks and rate limiting.
     policy: ?*const SecurityPolicy = null,
 
@@ -392,6 +396,7 @@ pub const Agent = struct {
             .compaction_keep_recent = cfg.agent.compaction_keep_recent,
             .compaction_max_summary_chars = cfg.agent.compaction_max_summary_chars,
             .compaction_max_source_chars = cfg.agent.compaction_max_source_chars,
+            .tool_filter_groups = cfg.agent.tool_filter_groups,
             .exec_security = switch (cfg.autonomy.level) {
                 .full => .full,
                 .read_only => .deny,
@@ -659,6 +664,96 @@ pub const Agent = struct {
         return commands.handleSlashCommand(self, message);
     }
 
+    /// Returns true if `name` matches `pattern` using simple `*` glob.
+    /// `*` matches any sequence of characters (including none).
+    fn globMatch(pattern: []const u8, name: []const u8) bool {
+        // Fast paths
+        if (std.mem.eql(u8, pattern, "*")) return true;
+        const star = std.mem.indexOfScalar(u8, pattern, '*') orelse {
+            return std.mem.eql(u8, pattern, name);
+        };
+        const prefix = pattern[0..star];
+        const suffix = pattern[star + 1 ..];
+        if (!std.mem.startsWith(u8, name, prefix)) return false;
+        if (suffix.len == 0) return true;
+        // suffix must appear at end (handles single-`*` patterns only)
+        if (name.len < prefix.len + suffix.len) return false;
+        return std.mem.endsWith(u8, name, suffix);
+    }
+
+    /// Filter `self.tool_specs` for the current turn based on `tool_filter_groups`.
+    ///
+    /// Returns a slice allocated from `arena` containing only the specs that should
+    /// be included for this turn.  The returned slice borrows pointers from
+    /// `self.tool_specs` — it must NOT outlive `self.tool_specs`.
+    ///
+    /// Rules:
+    ///   - If no filter groups are configured, returns `self.tool_specs` directly (no copy).
+    ///   - A tool whose name does NOT start with "mcp_" is always included.
+    ///   - `always` groups unconditionally include matching MCP tools.
+    ///   - `dynamic` groups include matching MCP tools when the user message contains
+    ///     at least one of the group's keywords (case-insensitive substring match).
+    fn filterToolSpecsForTurn(
+        self: *const Agent,
+        arena: std.mem.Allocator,
+        user_message: []const u8,
+    ) ![]const ToolSpec {
+        if (self.tool_filter_groups.len == 0) return self.tool_specs;
+
+        var result: std.ArrayListUnmanaged(ToolSpec) = .empty;
+
+        for (self.tool_specs) |spec| {
+            // Non-MCP tools are always included.
+            if (!std.mem.startsWith(u8, spec.name, "mcp_")) {
+                try result.append(arena, spec);
+                continue;
+            }
+
+            var include = false;
+            for (self.tool_filter_groups) |group| {
+                // Check if any pattern in this group matches the tool name.
+                var pattern_matched = false;
+                for (group.tools) |pattern| {
+                    if (globMatch(pattern, spec.name)) {
+                        pattern_matched = true;
+                        break;
+                    }
+                }
+                if (!pattern_matched) continue;
+
+                switch (group.mode) {
+                    .always => {
+                        include = true;
+                        break;
+                    },
+                    .dynamic => {
+                        // Case-insensitive substring scan of user_message for any keyword.
+                        for (group.keywords) |kw| {
+                            if (kw.len == 0) continue;
+                            // Allocate a lowercase copy of the message slice only once per keyword length
+                            // would be expensive; instead do a manual case-fold compare inline.
+                            var msg_pos: usize = 0;
+                            const msg = user_message;
+                            while (msg_pos + kw.len <= msg.len) : (msg_pos += 1) {
+                                const window = msg[msg_pos .. msg_pos + kw.len];
+                                if (std.ascii.eqlIgnoreCase(window, kw)) {
+                                    include = true;
+                                    break;
+                                }
+                            }
+                            if (include) break;
+                        }
+                        if (include) break;
+                    },
+                }
+            }
+
+            if (include) try result.append(arena, spec);
+        }
+
+        return result.toOwnedSlice(arena);
+    }
+
     /// Execute a single conversation turn: send messages to LLM, parse tool calls,
     /// execute tools, and loop until a final text response is produced.
     pub fn turn(self: *Agent, user_message: []const u8) ![]const u8 {
@@ -820,6 +915,9 @@ pub const Agent = struct {
             const is_streaming = self.stream_callback != null and self.stream_ctx != null and self.provider.supportsStreaming();
             const native_tools_enabled = !is_streaming and self.provider.supportsNativeTools();
 
+            // Filter tool specs for this turn (arena-owned; may be self.tool_specs directly if no groups).
+            const turn_tool_specs = try self.filterToolSpecsForTurn(arena, effective_user_message);
+
             // Call provider: streaming (no retries, no native tools) or blocking with retry
             var response: ChatResponse = undefined;
             var response_attempt: u32 = 1;
@@ -868,7 +966,7 @@ pub const Agent = struct {
                         .model = self.model_name,
                         .temperature = self.temperature,
                         .max_tokens = self.max_tokens,
-                        .tools = if (native_tools_enabled) self.tool_specs else null,
+                        .tools = if (native_tools_enabled) turn_tool_specs else null,
                         .timeout_secs = self.message_timeout_secs,
                         .reasoning_effort = self.reasoning_effort,
                     },
@@ -903,7 +1001,7 @@ pub const Agent = struct {
                                 .model = self.model_name,
                                 .temperature = self.temperature,
                                 .max_tokens = self.max_tokens,
-                                .tools = if (native_tools_enabled) self.tool_specs else null,
+                                .tools = if (native_tools_enabled) turn_tool_specs else null,
                                 .timeout_secs = self.message_timeout_secs,
                                 .reasoning_effort = self.reasoning_effort,
                             },
@@ -926,7 +1024,7 @@ pub const Agent = struct {
                             .model = self.model_name,
                             .temperature = self.temperature,
                             .max_tokens = self.max_tokens,
-                            .tools = if (native_tools_enabled) self.tool_specs else null,
+                            .tools = if (native_tools_enabled) turn_tool_specs else null,
                             .timeout_secs = self.message_timeout_secs,
                             .reasoning_effort = self.reasoning_effort,
                         },
@@ -947,7 +1045,7 @@ pub const Agent = struct {
                                     .model = self.model_name,
                                     .temperature = self.temperature,
                                     .max_tokens = self.max_tokens,
-                                    .tools = if (native_tools_enabled) self.tool_specs else null,
+                                    .tools = if (native_tools_enabled) turn_tool_specs else null,
                                     .timeout_secs = self.message_timeout_secs,
                                     .reasoning_effort = self.reasoning_effort,
                                 },
@@ -4468,4 +4566,159 @@ test "execBlockMessage allowlist mode honors wildcard allowed_commands" {
     // Same command should be blocked under restrictive allowlist.
     agent.policy = &restricted_policy;
     try std.testing.expect(agent.execBlockMessage(args) != null);
+}
+
+// ── filterToolSpecsForTurn tests ─────────────────────────────────
+
+test "filterToolSpecsForTurn no groups returns all specs unchanged" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .default_model = "openai/gpt-4.1-mini",
+        .allocator = allocator,
+    };
+    var noop = observability.NoopObserver{};
+    const specs: []const ToolSpec = &.{
+        .{ .name = "shell", .description = "run shell", .parameters_json = "{}" },
+        .{ .name = "mcp_vikunja_list_tasks", .description = "list tasks", .parameters_json = "{}" },
+    };
+    var agent = try Agent.fromConfig(allocator, &cfg, undefined, &.{}, null, noop.observer());
+    defer agent.deinit();
+    // Override tool_specs to our test set (not heap-alloc'd via fromConfig)
+    allocator.free(agent.tool_specs);
+    agent.tool_specs = specs;
+    agent.tool_filter_groups = &.{}; // explicitly empty
+
+    const result = try agent.filterToolSpecsForTurn(arena, "show me tasks");
+    // Should be same pointer — no copy made
+    try std.testing.expectEqual(specs.ptr, result.ptr);
+    try std.testing.expectEqual(@as(usize, 2), result.len);
+    // Prevent double-free: clear the pointer so deinit doesn't free it
+    agent.tool_specs = try allocator.alloc(ToolSpec, 0);
+}
+
+test "filterToolSpecsForTurn always group always includes matching MCP tool" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .default_model = "openai/gpt-4.1-mini",
+        .allocator = allocator,
+    };
+    var noop = observability.NoopObserver{};
+    const specs: []const ToolSpec = &.{
+        .{ .name = "shell", .description = "run shell", .parameters_json = "{}" },
+        .{ .name = "mcp_vikunja_list_tasks", .description = "list tasks", .parameters_json = "{}" },
+        .{ .name = "mcp_browser_open", .description = "open browser", .parameters_json = "{}" },
+    };
+    const patterns: []const []const u8 = &.{"mcp_vikunja_*"};
+    const groups: []const config_types.ToolFilterGroup = &.{
+        .{ .mode = .always, .tools = patterns, .keywords = &.{} },
+    };
+
+    var agent = try Agent.fromConfig(allocator, &cfg, undefined, &.{}, null, noop.observer());
+    defer agent.deinit();
+    allocator.free(agent.tool_specs);
+    agent.tool_specs = specs;
+    agent.tool_filter_groups = groups;
+
+    const result = try agent.filterToolSpecsForTurn(arena, "hello world");
+    // shell (non-MCP) + mcp_vikunja_list_tasks (always matched); mcp_browser_open excluded
+    try std.testing.expectEqual(@as(usize, 2), result.len);
+    try std.testing.expectEqualStrings("shell", result[0].name);
+    try std.testing.expectEqualStrings("mcp_vikunja_list_tasks", result[1].name);
+    agent.tool_specs = try allocator.alloc(ToolSpec, 0);
+}
+
+test "filterToolSpecsForTurn dynamic group includes tool on keyword match" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .default_model = "openai/gpt-4.1-mini",
+        .allocator = allocator,
+    };
+    var noop = observability.NoopObserver{};
+    const specs: []const ToolSpec = &.{
+        .{ .name = "shell", .description = "run shell", .parameters_json = "{}" },
+        .{ .name = "mcp_vikunja_list_tasks", .description = "list tasks", .parameters_json = "{}" },
+    };
+    const patterns: []const []const u8 = &.{"mcp_vikunja_*"};
+    const keywords: []const []const u8 = &.{ "task", "vikunja", "todo" };
+    const groups: []const config_types.ToolFilterGroup = &.{
+        .{ .mode = .dynamic, .tools = patterns, .keywords = keywords },
+    };
+
+    var agent = try Agent.fromConfig(allocator, &cfg, undefined, &.{}, null, noop.observer());
+    defer agent.deinit();
+    allocator.free(agent.tool_specs);
+    agent.tool_specs = specs;
+    agent.tool_filter_groups = groups;
+
+    // Keyword present — tool should be included
+    const with_kw = try agent.filterToolSpecsForTurn(arena, "show me my tasks for today");
+    try std.testing.expectEqual(@as(usize, 2), with_kw.len);
+    try std.testing.expectEqualStrings("mcp_vikunja_list_tasks", with_kw[1].name);
+
+    // No keyword — MCP tool should be excluded
+    const without_kw = try agent.filterToolSpecsForTurn(arena, "what is the weather?");
+    try std.testing.expectEqual(@as(usize, 1), without_kw.len);
+    try std.testing.expectEqualStrings("shell", without_kw[0].name);
+
+    agent.tool_specs = try allocator.alloc(ToolSpec, 0);
+}
+
+test "filterToolSpecsForTurn dynamic group keyword match is case-insensitive" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .default_model = "openai/gpt-4.1-mini",
+        .allocator = allocator,
+    };
+    var noop = observability.NoopObserver{};
+    const specs: []const ToolSpec = &.{
+        .{ .name = "mcp_vikunja_create_task", .description = "create task", .parameters_json = "{}" },
+    };
+    const patterns: []const []const u8 = &.{"mcp_vikunja_*"};
+    const keywords: []const []const u8 = &.{"task"};
+    const groups: []const config_types.ToolFilterGroup = &.{
+        .{ .mode = .dynamic, .tools = patterns, .keywords = keywords },
+    };
+
+    var agent = try Agent.fromConfig(allocator, &cfg, undefined, &.{}, null, noop.observer());
+    defer agent.deinit();
+    allocator.free(agent.tool_specs);
+    agent.tool_specs = specs;
+    agent.tool_filter_groups = groups;
+
+    const result = try agent.filterToolSpecsForTurn(arena, "Create a TASK for me");
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    agent.tool_specs = try allocator.alloc(ToolSpec, 0);
+}
+
+test "globMatch handles prefix wildcard" {
+    try std.testing.expect(Agent.globMatch("mcp_vikunja_*", "mcp_vikunja_list_tasks"));
+    try std.testing.expect(Agent.globMatch("mcp_vikunja_*", "mcp_vikunja_create_task"));
+    try std.testing.expect(!Agent.globMatch("mcp_vikunja_*", "mcp_browser_open"));
+    try std.testing.expect(Agent.globMatch("*", "anything"));
+    try std.testing.expect(Agent.globMatch("shell", "shell"));
+    try std.testing.expect(!Agent.globMatch("shell", "shell_extra"));
 }
