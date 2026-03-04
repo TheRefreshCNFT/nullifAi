@@ -268,6 +268,7 @@ Config: `~/.nullclaw/config.json` (created by `onboard`)
 > 2. a full Google service-account JSON object (same shape as Apps Script `GEMINI_KEY` with `project_id`, `client_email`, `private_key`).
 >
 > `models.providers.vertex.base_url` can be set explicitly (`.../projects/<id>/locations/<loc>/publishers/google/models`), or omitted when service-account JSON is used (nullclaw will derive it from `project_id`, with `VERTEX_LOCATION` defaulting to `global`).
+> Service-account mode requires `openssl` available in `$PATH` for RS256 JWT signing.
 
 ```json
 {

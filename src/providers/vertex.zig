@@ -461,6 +461,7 @@ fn parseServiceAccountCredentials(allocator: std.mem.Allocator, raw: []const u8)
     const client_email_raw = jsonNonEmptyString(obj, "client_email") orelse return null;
     const private_key_raw = jsonNonEmptyString(obj, "private_key") orelse return null;
     const token_uri_raw = jsonNonEmptyString(obj, "token_uri") orelse VertexProvider.DEFAULT_TOKEN_URI;
+    if (!std.mem.startsWith(u8, token_uri_raw, "https://")) return null;
 
     const project_id = allocator.dupe(u8, project_id_raw) catch return null;
     errdefer allocator.free(project_id);
@@ -540,7 +541,10 @@ fn signRsaSha256WithOpenSsl(
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
-    child.spawn() catch return error.VertexApiError;
+    child.spawn() catch |err| {
+        if (err == error.FileNotFound) return error.OpenSslNotFound;
+        return error.VertexApiError;
+    };
     var waited = false;
     errdefer if (!waited) {
         _ = child.kill() catch {};
@@ -929,6 +933,14 @@ test "parseServiceAccountCredentials extracts required fields" {
     try std.testing.expectEqualStrings("svc@proj-vertex.iam.gserviceaccount.com", creds.client_email);
     try std.testing.expect(std.mem.indexOf(u8, creds.private_key, "BEGIN PRIVATE KEY") != null);
     try std.testing.expectEqualStrings("https://oauth2.googleapis.com/token", creds.token_uri);
+}
+
+test "parseServiceAccountCredentials rejects non-https token_uri" {
+    const alloc = std.testing.allocator;
+    const raw =
+        \\{"project_id":"proj-vertex","client_email":"svc@proj-vertex.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n","token_uri":"http://oauth2.googleapis.com/token"}
+    ;
+    try std.testing.expect(parseServiceAccountCredentials(alloc, raw) == null);
 }
 
 test "buildAuthHeader uses service-account oauth2 token exchange path" {
