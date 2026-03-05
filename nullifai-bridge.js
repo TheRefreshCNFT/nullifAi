@@ -258,11 +258,10 @@ function stopWsServer() {
 const INJECTED_SCRIPT = `
 <style>
   #nullifai-control {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
     background: #1a1a2e; border-bottom: 1px solid #333;
     display: flex; align-items: center; justify-content: space-between;
     padding: 4px 16px; font-family: system-ui, sans-serif; font-size: 12px;
-    color: #aaa; height: 28px;
+    color: #aaa; height: 28px; flex-shrink: 0;
   }
   #nullifai-control .status-dot {
     width: 7px; height: 7px; border-radius: 50%; display: inline-block;
@@ -279,7 +278,6 @@ const INJECTED_SCRIPT = `
   #nullifai-control button.kill:hover { background: #2a1515; }
   #nullifai-control button.launch { border-color: #4ade80; color: #4ade80; }
   #nullifai-control button.launch:hover { background: #152a15; }
-  body { padding-top: 32px !important; }
 </style>
 <div id="nullifai-control">
   <div style="display:flex;align-items:center;">
@@ -351,6 +349,30 @@ const INJECTED_SCRIPT = `
       }
     }, 1000);
   };
+
+  // ── Insert control bar into app layout (below status bar) ────────
+  function placeControlBar() {
+    var bar = document.getElementById('nullifai-control');
+    var statusBar = document.querySelector('.status-bar');
+    if (!bar || !statusBar) return false;
+    // Insert bar right after the status bar in the flex column
+    statusBar.parentNode.insertBefore(bar, statusBar.nextSibling);
+    // Fix chat-screen: use flex instead of fixed height so adding
+    // our bar doesn't push the input below the viewport
+    var chatScreen = document.querySelector('.chat-screen');
+    if (chatScreen) {
+      chatScreen.style.flex = '1';
+      chatScreen.style.height = 'auto';
+      chatScreen.style.minHeight = '0';
+    }
+    return true;
+  }
+  // Poll until the Svelte app renders the status bar
+  var placeTries = 0;
+  var placeTimer = setInterval(function() {
+    placeTries++;
+    if (placeControlBar() || placeTries > 50) clearInterval(placeTimer);
+  }, 100);
 
   // ── Auto-pairing ─────────────────────────────────────────────────
   // Watches for the pairing screen, fetches the dynamic code from the
