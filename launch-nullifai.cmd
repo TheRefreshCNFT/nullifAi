@@ -33,6 +33,13 @@ if %errorlevel%==0 (
     exit /b 0
 )
 
+:: ── Start the gateway (Discord + channels, hidden) ────────────────
+set "GATEWAY_VBS=%~dp0launch-gateway.vbs"
+if exist "%GATEWAY_VBS%" (
+    echo Starting nullclaw gateway (Discord + channels^)...
+    cscript //nologo "%GATEWAY_VBS%"
+)
+
 :: ── Start the bridge (hidden, no terminal window) ───────────────────
 echo Starting nullifAi bridge...
 cscript //nologo "%HIDDEN%"
