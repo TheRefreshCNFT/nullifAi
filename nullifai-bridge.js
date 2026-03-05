@@ -24,8 +24,13 @@ const NULLCLAW_EXE = process.env.NULLCLAW_EXE || "C:\\Tools\\nullclaw\\2026.3.4\
 const WS_PORT = parseInt(process.env.WS_PORT || "32123", 10);
 const UI_PORT = parseInt(process.env.UI_PORT || "4173", 10);
 const UI_DIR = process.env.UI_DIR || path.join(__dirname, "nullclaw-chat-ui", "build");
-const PAIRING_CODE = "123456";
 const AGENT_ID = "default";
+
+// Dynamic pairing code — regenerated on each WS server start
+let pairingCode = generatePairingCode();
+function generatePairingCode() {
+  return crypto.randomInt(100000, 999999).toString();
+}
 
 const JWT_SECRET = crypto.randomBytes(32);
 
@@ -144,7 +149,7 @@ function setupWebSocket(wsInstance, req) {
       const code = payload.pairing_code || payload.code;
       console.log(`[ws] pairing request, code=${code}`);
 
-      if (code !== PAIRING_CODE) {
+      if (code !== pairingCode) {
         sendEvent(wsInstance, "pairing_result", sessionId, {
           ok: false, error: "invalid_code", message: "Invalid pairing code",
         }, requestId ? { request_id: requestId } : {});
@@ -210,7 +215,9 @@ function startWsServer() {
     wss.on("connection", setupWebSocket);
     wsServer.listen(WS_PORT, "127.0.0.1", () => {
       bridgeActive = true;
+      pairingCode = generatePairingCode();
       console.log(`[ws] WebSocket server started on ws://127.0.0.1:${WS_PORT}/ws`);
+      console.log(`[ws] Pairing code: ${pairingCode}`);
       resolve();
     });
   });
@@ -247,45 +254,46 @@ function stopWsServer() {
   });
 }
 
-// ── Control bar HTML ────────────────────────────────────────────────────
-const CONTROL_BAR_SCRIPT = `
+// ── Injected HTML (control bar + auto-pairing) ─────────────────────────
+const INJECTED_SCRIPT = `
 <style>
   #nullifai-control {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999;
-    background: #1a1a2e; border-top: 1px solid #333;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
+    background: #1a1a2e; border-bottom: 1px solid #333;
     display: flex; align-items: center; justify-content: space-between;
-    padding: 6px 16px; font-family: system-ui, sans-serif; font-size: 13px;
-    color: #aaa;
+    padding: 4px 16px; font-family: system-ui, sans-serif; font-size: 12px;
+    color: #aaa; height: 28px;
   }
   #nullifai-control .status-dot {
-    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
-    margin-right: 8px;
+    width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+    margin-right: 6px;
   }
   #nullifai-control .status-dot.live { background: #4ade80; }
   #nullifai-control .status-dot.dead { background: #f87171; }
   #nullifai-control button {
-    background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
-    padding: 4px 14px; cursor: pointer; font-size: 13px; margin-left: 8px;
+    background: #333; color: #ddd; border: 1px solid #555; border-radius: 3px;
+    padding: 2px 10px; cursor: pointer; font-size: 11px; margin-left: 6px;
   }
   #nullifai-control button:hover { background: #444; }
   #nullifai-control button.kill { border-color: #f87171; color: #f87171; }
   #nullifai-control button.kill:hover { background: #2a1515; }
   #nullifai-control button.launch { border-color: #4ade80; color: #4ade80; }
   #nullifai-control button.launch:hover { background: #152a15; }
-  body { padding-bottom: 40px !important; }
+  body { padding-top: 32px !important; }
 </style>
 <div id="nullifai-control">
   <div style="display:flex;align-items:center;">
     <span class="status-dot live" id="nai-dot"></span>
-    <span id="nai-status">nullifAi running</span>
+    <span id="nai-status">nullifAi</span>
   </div>
   <div>
-    <button class="kill" id="nai-kill" onclick="nullifaiKill()">Kill Session</button>
+    <button class="kill" id="nai-kill" onclick="nullifaiKill()">Kill</button>
     <button class="launch" id="nai-launch" onclick="nullifaiLaunch()" style="display:none">Launch</button>
   </div>
 </div>
 <script>
 (function() {
+  // ── Control bar logic ─────────────────────────────────────────────
   function updateUI(alive) {
     var dot = document.getElementById('nai-dot');
     var status = document.getElementById('nai-status');
@@ -293,7 +301,7 @@ const CONTROL_BAR_SCRIPT = `
     var launchBtn = document.getElementById('nai-launch');
     if (alive) {
       dot.className = 'status-dot live';
-      status.textContent = 'nullifAi running';
+      status.textContent = 'nullifAi';
       killBtn.style.display = '';
       launchBtn.style.display = 'none';
     } else {
@@ -304,7 +312,6 @@ const CONTROL_BAR_SCRIPT = `
     }
   }
 
-  // Poll status every 3s
   setInterval(async function() {
     try {
       var r = await fetch('/api/status');
@@ -323,10 +330,7 @@ const CONTROL_BAR_SCRIPT = `
     var btn = document.getElementById('nai-launch');
     btn.textContent = 'Starting...';
     btn.disabled = true;
-    try {
-      await fetch('/api/launch', { method: 'POST' });
-    } catch {}
-    // Poll until active
+    try { await fetch('/api/launch', { method: 'POST' }); } catch {}
     var attempts = 0;
     var poll = setInterval(async function() {
       attempts++;
@@ -335,7 +339,6 @@ const CONTROL_BAR_SCRIPT = `
         var data = await r.json();
         if (data.active) {
           clearInterval(poll);
-          updateUI(true);
           btn.textContent = 'Launch';
           btn.disabled = false;
           window.location.reload();
@@ -348,6 +351,93 @@ const CONTROL_BAR_SCRIPT = `
       }
     }, 1000);
   };
+
+  // ── Auto-pairing ─────────────────────────────────────────────────
+  // Watches for the pairing screen, fetches the dynamic code from the
+  // bridge API, fills it in, and auto-submits. The user never sees
+  // the pairing screen.
+  async function autoPair() {
+    // Fetch the current pairing code from the bridge
+    var code;
+    try {
+      var r = await fetch('/api/pairing-code');
+      var data = await r.json();
+      code = data.code;
+    } catch { return; }
+    if (!code) return;
+
+    // Watch for the pairing input to appear
+    var observer = new MutationObserver(function() {
+      // Look for the 6-digit pairing input (placeholder="______")
+      var input = document.querySelector('input[placeholder="______"]');
+      if (!input) return;
+
+      // Fill in the code
+      var nativeSet = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+      ).set;
+      nativeSet.call(input, code);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // Find and click the connect/pair button
+      setTimeout(function() {
+        // Look for buttons in the pairing screen
+        var buttons = document.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+          var txt = buttons[i].textContent.toLowerCase().trim();
+          if (txt.includes('connect') || txt.includes('pair') || txt.includes('link')) {
+            buttons[i].click();
+            observer.disconnect();
+            return;
+          }
+        }
+        // If no labeled button found, try any primary/submit button near the input
+        var form = input.closest('form') || input.closest('div');
+        if (form) {
+          var btn = form.querySelector('button[type="submit"], button:not([type])');
+          if (btn) {
+            btn.click();
+            observer.disconnect();
+          }
+        }
+      }, 100);
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Also check immediately (pairing screen might already be visible)
+    setTimeout(function() {
+      var input = document.querySelector('input[placeholder="______"]');
+      if (input) {
+        var nativeSet = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        ).set;
+        nativeSet.call(input, code);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        setTimeout(function() {
+          var buttons = document.querySelectorAll('button');
+          for (var i = 0; i < buttons.length; i++) {
+            var txt = buttons[i].textContent.toLowerCase().trim();
+            if (txt.includes('connect') || txt.includes('pair') || txt.includes('link')) {
+              buttons[i].click();
+              observer.disconnect();
+              return;
+            }
+          }
+        }, 100);
+      }
+    }, 500);
+
+    // Auto-disconnect observer after 30s to avoid memory leaks
+    setTimeout(function() { observer.disconnect(); }, 30000);
+  }
+
+  // Run auto-pair on page load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', autoPair);
+  } else {
+    autoPair();
+  }
 })();
 </script>
 `;
@@ -377,6 +467,12 @@ const uiServer = http.createServer(async (req, res) => {
       sessions: sessions.size,
       agents: activeAgents.size,
     }));
+    return;
+  }
+
+  if (req.url === "/api/pairing-code") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ code: pairingCode }));
     return;
   }
 
@@ -433,7 +529,7 @@ const uiServer = http.createServer(async (req, res) => {
     // Inject control bar into HTML pages
     if (ext === ".html") {
       let html = content.toString();
-      html = html.replace("</body>", CONTROL_BAR_SCRIPT + "\n</body>");
+      html = html.replace("</body>", INJECTED_SCRIPT + "\n</body>");
       res.writeHead(200, { "Content-Type": contentType });
       res.end(html);
       return;
@@ -451,7 +547,7 @@ const uiServer = http.createServer(async (req, res) => {
 async function main() {
   // Start WebSocket server
   await startWsServer();
-  console.log(`  Pairing code: ${PAIRING_CODE}`);
+  console.log(`  Pairing: auto (dynamic code)`);
   console.log(`  Agent: ${NULLCLAW_EXE}`);
 
   // Start UI + API server (this one never stops)
