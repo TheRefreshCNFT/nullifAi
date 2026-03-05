@@ -102,6 +102,10 @@ pub fn main() !void {
         try yc.provider_probe.run(allocator, args[2..]);
         return;
     }
+    if (std.mem.eql(u8, args[1], "--probe-channel-health")) {
+        try yc.channel_probe.run(allocator, args[2..]);
+        return;
+    }
     if (std.mem.eql(u8, args[1], "--from-json")) {
         try yc.from_json.run(allocator, args[2..]);
         return;
