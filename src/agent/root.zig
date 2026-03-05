@@ -587,6 +587,20 @@ pub const Agent = struct {
         return commands.composeFinalReply(self, base_text, reasoning_content, usage);
     }
 
+    fn selectDisplayText(response_text: []const u8, parsed_text: []const u8, parsed_calls_len: usize) []const u8 {
+        if (parsed_calls_len > 0) return parsed_text;
+        if (parsed_text.len > 0) {
+            // Some malformed/unclosed tool-call payloads can survive into parsed_text
+            // via parser recovery fallbacks. Suppress them from user-visible output.
+            if (dispatcher.containsToolCallMarkup(parsed_text)) return "";
+            return parsed_text;
+        }
+        // If tool-call markup exists but parsing produced no valid calls/text,
+        // never show the raw payload to the user.
+        if (dispatcher.containsToolCallMarkup(response_text)) return "";
+        return response_text;
+    }
+
     fn shouldForceActionFollowThrough(text: []const u8) bool {
         const ascii_patterns = [_][]const u8{
             "i'll try",
@@ -1238,12 +1252,7 @@ pub const Agent = struct {
             // When tool calls are present, only show parsed plain text (if any).
             // Never fall back to raw response_text here, otherwise markup like
             // <tool_call>...</tool_call> can leak to users.
-            const display_text = if (parsed_calls.len > 0)
-                parsed_text
-            else if (parsed_text.len > 0)
-                parsed_text
-            else
-                response_text;
+            const display_text = selectDisplayText(response_text, parsed_text, parsed_calls.len);
 
             if (parsed_calls.len == 0) {
                 // Guardrail: if the model promises "I'll try/check now" but emits no
@@ -4774,6 +4783,29 @@ test "Agent shouldForceActionFollowThrough detects russian deferred promise" {
 test "Agent shouldForceActionFollowThrough ignores normal final answer" {
     try std.testing.expect(!Agent.shouldForceActionFollowThrough("Вот результат: файл успешно отправлен."));
     try std.testing.expect(!Agent.shouldForceActionFollowThrough("I cannot do that in this environment."));
+}
+
+test "Agent selectDisplayText hides malformed tool markup payload" {
+    const raw = "<tool_call>web_search<arg_key>query</arg_key><arg_value>x</arg_value></tool_call>";
+    const selected = Agent.selectDisplayText(raw, "", 0);
+    try std.testing.expectEqualStrings("", selected);
+}
+
+test "Agent selectDisplayText keeps plain text when no markup exists" {
+    const raw = "All good.";
+    const selected = Agent.selectDisplayText(raw, "", 0);
+    try std.testing.expectEqualStrings("All good.", selected);
+}
+
+test "Agent selectDisplayText prefers parsed text when present" {
+    const selected = Agent.selectDisplayText("<tool_call>{}</tool_call>", "let me check", 1);
+    try std.testing.expectEqualStrings("let me check", selected);
+}
+
+test "Agent selectDisplayText hides malformed tool markup present in parsed text" {
+    const parsed_with_markup = "Some text <tool_call>{\"name\":\"shell\"";
+    const selected = Agent.selectDisplayText(parsed_with_markup, parsed_with_markup, 0);
+    try std.testing.expectEqualStrings("", selected);
 }
 
 test "Agent.fromConfig sets exec_security=full for full autonomy" {
