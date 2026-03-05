@@ -72,58 +72,146 @@ function sendEvent(ws, type, sessionId, payload, extra = {}) {
   ws.send(JSON.stringify(msg));
 }
 
-// ── Run nullclaw agent for a single message ─────────────────────────────
-function runAgent(sessionId, content, ws) {
-  const args = ["agent", "-m", content, "-s", sessionId];
-  const child = spawn(NULLCLAW_EXE, args, {
+// ── Persistent agent sessions (one process per session) ──────────────────
+const agentSessions = new Map(); // sessionId -> { child, ws, phase, ... }
+const AGENT_SETUP_CMDS = ["/think high", "/reason on"];
+
+function getOrCreateAgent(sessionId, ws) {
+  if (agentSessions.has(sessionId)) {
+    const sess = agentSessions.get(sessionId);
+    sess.ws = ws;
+    return sess;
+  }
+
+  const child = spawn(NULLCLAW_EXE, ["agent", "-s", sessionId], {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
 
-  activeAgents.set(sessionId, child);
+  // phase: "booting" -> "setup" -> "ready" -> "responding" -> "ready"
+  const sess = {
+    child, ws,
+    phase: "booting",
+    accum: "",          // accumulated stdout for current phase
+    idleTimer: null,    // fires when output stops (prompt detected)
+    queue: [],          // queued user messages
+    setupIdx: 0,        // which setup cmd we're on
+  };
+  agentSessions.set(sessionId, sess);
 
-  let fullResponse = "";
-  let preambleDone = false;
+  function onIdle() {
+    // Called when stdout has been quiet for a bit — means prompt is showing
+    const output = sess.accum;
+    sess.accum = "";
+
+    if (sess.phase === "booting") {
+      // Initial banner done, send first setup command
+      sess.phase = "setup";
+      sess.setupIdx = 0;
+      console.log(`  [agent ${sessionId}] booted, sending setup`);
+      child.stdin.write(AGENT_SETUP_CMDS[0] + "\n");
+      return;
+    }
+
+    if (sess.phase === "setup") {
+      sess.setupIdx++;
+      if (sess.setupIdx < AGENT_SETUP_CMDS.length) {
+        child.stdin.write(AGENT_SETUP_CMDS[sess.setupIdx] + "\n");
+        return;
+      }
+      // All setup done
+      sess.phase = "ready";
+      console.log(`  [agent ${sessionId}] setup complete, ready`);
+      if (sess.queue.length > 0) {
+        const next = sess.queue.shift();
+        sess.phase = "responding";
+        child.stdin.write(next + "\n");
+      }
+      return;
+    }
+
+    if (sess.phase === "responding") {
+      // Response complete — clean and send
+      const cleaned = output
+        .replace(/^(Sending to [^\n]*\n|Session: [^\n]*\n|Model: [^\n]*\n|Loading[^\n]*\n)*/g, "")
+        .replace(/\n> ?$/, "")
+        .replace(/^> ?\n?/, "")
+        .trim();
+      if (cleaned) {
+        sendEvent(sess.ws, "assistant_final", sessionId, { content: cleaned });
+      } else {
+        sendEvent(sess.ws, "assistant_final", sessionId, { content: "" });
+      }
+      sess.phase = "ready";
+      // Process next queued message
+      if (sess.queue.length > 0) {
+        const next = sess.queue.shift();
+        sess.phase = "responding";
+        child.stdin.write(next + "\n");
+      }
+      return;
+    }
+  }
 
   child.stdout.on("data", (data) => {
-    let text = data.toString();
-    fullResponse += text;
+    const text = data.toString();
+    sess.accum += text;
 
-    if (!preambleDone) {
-      text = text.replace(/^(Sending to [^\n]*\n|Session: [^\n]*\n|Model: [^\n]*\n|Loading[^\n]*\n)*/g, "");
-      if (text.length > 0) {
-        preambleDone = true;
-      } else {
-        return;
+    // Stream chunks to UI while responding (skip prompt lines)
+    if (sess.phase === "responding") {
+      let chunk = text.replace(/\n?> ?$/, "").replace(/^> ?\n?/, "");
+      if (sess.accum.length === text.length) {
+        chunk = chunk.replace(/^(Sending to [^\n]*\n|Session: [^\n]*\n|Model: [^\n]*\n|Loading[^\n]*\n)*/g, "");
+      }
+      if (chunk) {
+        sendEvent(sess.ws, "assistant_chunk", sessionId, { content: chunk });
       }
     }
 
-    sendEvent(ws, "assistant_chunk", sessionId, { content: text });
+    // Reset idle timer — each data chunk resets the clock
+    if (sess.idleTimer) clearTimeout(sess.idleTimer);
+    sess.idleTimer = setTimeout(onIdle, 300);
   });
 
   child.stderr.on("data", (data) => {
     const text = data.toString().trim();
-    if (text) console.log(`  [agent stderr] ${text}`);
+    if (text) console.log(`  [agent ${sessionId} stderr] ${text}`);
   });
 
   child.on("close", (code) => {
-    activeAgents.delete(sessionId);
-    const cleaned = fullResponse
-      .replace(/^(Sending to [^\n]*\n|Session: [^\n]*\n|Model: [^\n]*\n|Loading[^\n]*\n)*/g, "")
-      .replace(/\n> ?$/, "")
-      .trim();
-    sendEvent(ws, "assistant_final", sessionId, { content: cleaned });
-    if (code !== 0) console.log(`  [agent] exited with code ${code}`);
+    console.log(`  [agent ${sessionId}] exited code=${code}`);
+    if (sess.idleTimer) clearTimeout(sess.idleTimer);
+    agentSessions.delete(sessionId);
+    if (sess.phase === "responding" && sess.accum) {
+      const cleaned = sess.accum.replace(/\n> ?$/, "").trim();
+      sendEvent(sess.ws, "assistant_final", sessionId, { content: cleaned });
+    }
   });
 
   child.on("error", (err) => {
-    activeAgents.delete(sessionId);
-    console.error(`  [agent] spawn error: ${err.message}`);
+    console.error(`  [agent ${sessionId}] spawn error: ${err.message}`);
+    agentSessions.delete(sessionId);
     sendEvent(ws, "error", sessionId, {
       code: "agent_error",
       message: `Failed to run agent: ${err.message}`,
     });
   });
+
+  return sess;
+}
+
+function runAgent(sessionId, content, ws) {
+  const sess = getOrCreateAgent(sessionId, ws);
+  activeAgents.set(sessionId, sess.child);
+
+  if (sess.phase === "ready") {
+    sess.phase = "responding";
+    sess.accum = "";
+    sess.child.stdin.write(content + "\n");
+  } else {
+    // Still booting/setup/responding — queue it
+    sess.queue.push(content);
+  }
 }
 
 // ── Image description via Ollama vision models ──────────────────────────
@@ -353,6 +441,7 @@ const INJECTED_SCRIPT = `
     overflow: hidden; font-family: var(--font-mono, monospace); font-size: 12px; z-index: 50;
   }
   #nai-sidebar.collapsed { width: 44px; min-width: 44px; max-width: 44px; }
+  .nai-sidebar-content { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
   #nai-sidebar.collapsed .nai-sidebar-content { display: none; }
   .nai-sidebar-toggle {
     background: transparent; border: none; border-bottom: 1px solid #222;
@@ -382,7 +471,9 @@ const INJECTED_SCRIPT = `
   }
   .nai-nav-btn:hover { color: #aaa; background: rgba(255,255,255,0.03); }
   .nai-nav-btn.active { color: var(--accent, #0f0); border-bottom-color: var(--accent, #0f0); }
-  .nai-view { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .nai-view { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; }
+  #nai-cust-sub { overflow-y: auto; max-height: 100%; }
+  #nai-cust-main { overflow-y: auto; max-height: 100%; }
   .nai-session-list { padding: 4px 0; }
   .nai-session-item {
     display: flex; align-items: flex-start; flex-direction: column;
@@ -426,6 +517,36 @@ const INJECTED_SCRIPT = `
   .nai-restored .nai-meta { display: flex; gap: 6px; font-size: 11px; margin-bottom: 4px; opacity: 0.7; }
   .nai-restored .nai-msg-content { font-size: 14px; line-height: 1.6; word-wrap: break-word; white-space: pre-wrap; color: #ccc; }
   .nai-empty-sidebar { padding: 20px 12px; color: #555; text-align: center; font-size: 11px; }
+  /* ── Customization Center ────────────────────────────────────── */
+  .nai-cust-title { font-size: 15px; color: var(--accent, #0f0); font-weight: 700; text-align: center; margin-bottom: 4px; }
+  .nai-cust-tagline { font-size: 10px; color: #555; text-align: center; margin-bottom: 16px; line-height: 1.4; padding: 0 8px; }
+  .nai-cust-grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px; justify-content: center; }
+  .nai-cust-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 12px; background: rgba(255,255,255,0.03);
+    border: 1px solid #333; border-radius: 16px; color: #aaa;
+    font-size: 11px; font-family: var(--font-mono, monospace);
+    cursor: pointer; transition: all 0.2s; white-space: nowrap;
+  }
+  .nai-cust-pill:hover { border-color: var(--accent, #0f0); color: var(--accent, #0f0); background: rgba(0,255,65,0.05); }
+  .nai-cust-pill .pill-icon { font-size: 13px; opacity: 0.7; }
+  .nai-cust-pill.cat-pill { padding: 8px 14px; font-size: 12px; font-weight: 600; }
+  .nai-cust-pill.active { border-color: var(--accent, #0f0); color: var(--accent, #0f0); background: rgba(0,255,65,0.08); }
+  .nai-cust-pill.dim { opacity: 0.4; border-style: dashed; }
+.nai-cust-pill.template { border-style: dashed; opacity: 0.7; }
+.nai-cust-pill.template:hover { opacity: 1; }
+  .nai-cust-pill.dim:hover { opacity: 0.8; }
+  .nai-cust-back {
+    display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+    background: transparent; border: none; border-bottom: 1px solid #222;
+    color: #888; font-size: 11px; font-family: var(--font-mono, monospace);
+    cursor: pointer; transition: color 0.2s; width: 100%;
+  }
+  .nai-cust-back:hover { color: var(--accent, #0f0); }
+  .nai-cust-back svg { flex-shrink: 0; }
+  .nai-cust-sub-title { font-size: 13px; color: var(--accent, #0f0); font-weight: 700; padding: 10px 12px 6px; }
+  .nai-cust-group-label { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: 1px; padding: 10px 12px 4px; }
+  .nai-cust-desc { font-size: 9px; color: #555; padding: 0 12px 10px; }
 </style>
 <div id="nullifai-control">
   <div style="display:flex;align-items:center;">
@@ -468,9 +589,19 @@ const INJECTED_SCRIPT = `
       <div id="nai-search-results"></div>
     </div>
     <div id="nai-view-customize" class="nai-view" style="display:none">
-      <div style="padding:40px 16px;text-align:center;">
-        <div style="font-size:16px;color:var(--accent,#0f0);margin-bottom:8px;font-weight:700;">Customization Center</div>
-        <div style="color:#555;font-size:11px;">Coming soon.</div>
+      <div id="nai-cust-main" style="padding:16px 0;">
+        <div class="nai-cust-title">Customization Center</div>
+        <div class="nai-cust-tagline">Where this becomes more than a tool and an extension of you.</div>
+        <div class="nai-cust-grid" id="nai-cust-categories"></div>
+      </div>
+      <div id="nai-cust-sub" style="display:none;">
+        <button class="nai-cust-back" id="nai-cust-back-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          <span>Back</span>
+        </button>
+        <div id="nai-cust-sub-title" class="nai-cust-sub-title"></div>
+        <div id="nai-cust-sub-desc" class="nai-cust-desc"></div>
+        <div id="nai-cust-sub-content" class="nai-cust-grid" style="padding-top:4px;"></div>
       </div>
     </div>
   </div>
@@ -614,6 +745,285 @@ const INJECTED_SCRIPT = `
     }
   };
 
+  // ── Input injection helper ────────────────────────────────────────
+  function injectToInput(text, autoSend) {
+    var ta = document.querySelector('[class*="input-area"] textarea');
+    if (!ta) return;
+    var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    nativeSet.call(ta, text);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.focus();
+    if (autoSend) {
+      setTimeout(function() {
+        var sendBtn = ta.closest('form');
+        if (sendBtn) { sendBtn.requestSubmit ? sendBtn.requestSubmit() : sendBtn.submit(); return; }
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+      }, 50);
+    }
+  }
+
+  // ── NaiCustomize — Customization Center ──────────────────────────
+  var NaiCustomize = {
+    categories: {
+      commands: {
+        icon: '\u2318', label: 'Commands',
+        desc: 'Agent commands sent directly to the chat.',
+        groups: [
+          { label: 'Info', items: [
+            { label: '/help', desc: 'Show available commands', action: '/help', send: true },
+            { label: '/status', desc: 'System status', action: '/status', send: true },
+            { label: '/version', desc: 'Show agent version', action: '/version', send: true },
+            { label: '/whoami', desc: 'Identity info', action: '/whoami', send: true },
+            { label: '/capabilities', desc: 'List capabilities', action: '/capabilities', send: true },
+            { label: '/debug', desc: 'Debug info', action: '/debug', send: true }
+          ]},
+          { label: 'Session', items: [
+            { label: '/new', desc: 'Start new session', action: '/new', send: true },
+            { label: '/reset', desc: 'Reset with optional model', action: '/reset ' },
+            { label: '/restart', desc: 'Restart with optional model', action: '/restart ' },
+            { label: '/compact', desc: 'Compact context', action: '/compact', send: true },
+            { label: '/export', desc: 'Export session', action: '/export', send: true },
+            { label: '/session ttl', desc: 'Set session timeout', action: '/session ttl ' }
+          ]},
+          { label: 'Models', items: [
+            { label: '/models', desc: 'List all models', action: '/models', send: true },
+            { label: '/model', desc: 'Switch model', action: '/model ' }
+          ]},
+          { label: 'Thinking', items: [
+            { label: '/think', desc: 'Check status', action: '/think', send: true },
+            { label: '/think high', desc: 'Enable thinking', action: '/think high', send: true },
+            { label: '/think xhigh', desc: 'Max thinking', action: '/think xhigh', send: true },
+            { label: '/think off', desc: 'Disable thinking', action: '/think off', send: true }
+          ]},
+          { label: 'Verbose', items: [
+            { label: '/verbose', desc: 'Check status', action: '/verbose', send: true },
+            { label: '/verbose on', desc: 'Enable verbose', action: '/verbose on', send: true },
+            { label: '/verbose off', desc: 'Disable verbose', action: '/verbose off', send: true }
+          ]},
+          { label: 'Reasoning', items: [
+            { label: '/reason', desc: 'Check status', action: '/reason', send: true },
+            { label: '/reason on', desc: 'Enable reasoning', action: '/reason on', send: true },
+            { label: '/reason off', desc: 'Disable reasoning', action: '/reason off', send: true }
+          ]},
+          { label: 'Memory', items: [
+            { label: '/memory list', desc: 'List memories', action: '/memory list', send: true },
+            { label: '/memory stats', desc: 'Memory statistics', action: '/memory stats', send: true },
+            { label: '/memory search', desc: 'Search memories', action: '/memory search ' },
+            { label: '/memory recall', desc: 'Recall by topic', action: '/memory recall ' },
+            { label: '/doctor', desc: 'Memory diagnostics', action: '/doctor', send: true }
+          ]},
+          { label: 'Agents', items: [
+            { label: '/subagents', desc: 'List sub-agents', action: '/subagents', send: true },
+            { label: '/focus', desc: 'Focus an agent', action: '/focus ' },
+            { label: '/unfocus', desc: 'Unfocus agent', action: '/unfocus', send: true },
+            { label: '/steer', desc: 'Steer an agent', action: '/steer ' },
+            { label: '/tell', desc: 'Tell an agent', action: '/tell ' }
+          ]},
+          { label: 'Features', items: [
+            { label: '/tts', desc: 'Text-to-speech toggle', action: '/tts', send: true },
+            { label: '/voice', desc: 'Voice settings', action: '/voice', send: true },
+            { label: '/queue', desc: 'Queue settings', action: '/queue', send: true },
+            { label: '/usage', desc: 'Token usage', action: '/usage', send: true },
+            { label: '/config', desc: 'Configuration', action: '/config', send: true }
+          ]},
+          { label: 'Execution & Access', items: [
+            { label: '/exec', desc: 'Execution settings', action: '/exec', send: true },
+            { label: '/exec security=full', desc: 'Unlock all tools', action: '/exec security=full', send: true },
+            { label: '/exec security=allowlist', desc: 'Restrict to allowlist', action: '/exec security=allowlist', send: true },
+            { label: '/allowlist', desc: 'View allowlist', action: '/allowlist', send: true },
+            { label: '/approve', desc: 'Approve pending', action: '/approve', send: true },
+            { label: '/elevated', desc: 'Elevated mode', action: '/elevated', send: true },
+            { label: '/context', desc: 'Context settings', action: '/context', send: true }
+          ]}
+        ]
+      },
+      skills: {
+        icon: '\u2726', label: 'Skills',
+        desc: 'Extend the agent with installable skill packs.',
+        items: [
+          { label: '/skill', desc: 'Skill management', action: '/skill', send: true },
+          { label: 'Install a Skill', desc: 'Install by name', action: '/skill install ' }
+        ],
+        emptyNote: 'No skills installed yet. Use /skill to manage skill packs via CLI: nullclaw skills install <name>'
+      },
+      tools: {
+        icon: '\u2699', label: 'Tools',
+        desc: 'Built-in tools the agent can use during conversations.',
+        groups: [
+          { label: 'File System', items: [
+            { label: '/file_read', desc: 'Read file (workspace only)', action: '/file_read ' },
+            { label: '/file_write', desc: 'Write to a file', action: '/file_write ' },
+            { label: '/file_edit', desc: 'Edit a file', action: '/file_edit ' },
+            { label: '/shell type', desc: 'Read any file via shell', action: '/shell type ' }
+          ]},
+          { label: 'System', items: [
+            { label: '/shell', desc: 'Run shell commands', action: '/shell ' },
+            { label: '/git', desc: 'Git operations', action: '/git ' },
+            { label: '/image_info', desc: 'Analyze images', action: '/image_info ' }
+          ]},
+          { label: 'Memory', items: [
+            { label: '/memory store', desc: 'Save a memory', action: '/memory store ' },
+            { label: '/memory recall', desc: 'Recall memories', action: '/memory recall ' },
+            { label: '/memory list', desc: 'List all memories', action: '/memory list', send: true },
+            { label: '/memory search', desc: 'Search memories', action: '/memory search ' },
+            { label: '/memory forget', desc: 'Remove a memory', action: '/memory forget ' }
+          ]},
+          { label: 'Agent', items: [
+            { label: '/delegate', desc: 'Delegate to sub-agent', action: '/delegate ' },
+            { label: '/schedule', desc: 'Schedule a task', action: '/schedule ' },
+            { label: '/spawn', desc: 'Spawn background task', action: '/spawn ' }
+          ]},
+          { label: 'Disabled (enable in config)', items: [
+            { label: 'http_request', desc: 'HTTP requests', action: 'Enable the http_request tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'browser', desc: 'Browser automation', action: 'Enable the browser tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'screenshot', desc: 'Screenshots', action: 'Enable the screenshot tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'composio', desc: 'Composio integration', action: 'Enable the composio tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'browser_open', desc: 'Open browser URLs', action: 'Enable the browser_open tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'hardware_board_info', desc: 'Hardware board info', action: 'Enable the hardware_board_info tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'hardware_memory', desc: 'Hardware memory', action: 'Enable the hardware_memory tool in your config and confirm it is active', dim: true, send: true },
+            { label: 'i2c', desc: 'I2C bus control', action: 'Enable the i2c tool in your config and confirm it is active', dim: true, send: true }
+          ]}
+        ]
+      },
+      connectors: {
+        icon: '\u2B21', label: 'Connectors',
+        desc: 'Communication channels the agent can connect to.',
+        configured: ['cli', 'web'],
+        dockable: [
+          { label: 'telegram', action: '/dock-telegram', send: true },
+          { label: 'discord', action: '/dock-discord', send: true },
+          { label: 'slack', action: '/dock-slack', send: true }
+        ],
+        available: ['webhook', 'imessage', 'matrix', 'mattermost', 'whatsapp', 'irc', 'lark', 'dingtalk', 'signal', 'email', 'line', 'qq', 'onebot', 'maixcam', 'nostr']
+      },
+      models: {
+        icon: '\u25C8', label: 'Models',
+        desc: 'AI models available for conversations.',
+        dynamic: true
+      }
+    },
+
+    init: function() {
+      var grid = document.getElementById('nai-cust-categories');
+      if (!grid) return;
+      var self = this;
+      var cats = this.categories;
+      var html = '';
+      for (var key in cats) {
+        var c = cats[key];
+        html += '<button class="nai-cust-pill cat-pill" data-cat="' + key + '">'
+          + '<span class="pill-icon">' + c.icon + '</span>' + c.label + '</button>';
+      }
+      grid.innerHTML = html;
+      grid.addEventListener('click', function(e) {
+        var pill = e.target.closest('[data-cat]');
+        if (pill) self.openCategory(pill.getAttribute('data-cat'));
+      });
+      document.getElementById('nai-cust-back-btn').addEventListener('click', function() {
+        self.goBack();
+      });
+      document.getElementById('nai-cust-sub-content').addEventListener('click', function(e) {
+        var pill = e.target.closest('[data-action]');
+        if (pill) injectToInput(pill.getAttribute('data-action'), pill.hasAttribute('data-send'));
+      });
+    },
+
+    goBack: function() {
+      document.getElementById('nai-cust-main').style.display = '';
+      document.getElementById('nai-cust-sub').style.display = 'none';
+    },
+
+    openCategory: function(key) {
+      document.getElementById('nai-cust-main').style.display = 'none';
+      document.getElementById('nai-cust-sub').style.display = '';
+      var cat = this.categories[key];
+      document.getElementById('nai-cust-sub-title').textContent = cat.icon + ' ' + cat.label;
+      document.getElementById('nai-cust-sub-desc').textContent = cat.desc || '';
+
+      if (key === 'models') { this.renderModels(); return; }
+      if (key === 'connectors') { this.renderConnectors(); return; }
+      if (cat.groups) { this.renderGrouped(key); return; }
+
+      // Skills — simple item list
+      var content = document.getElementById('nai-cust-sub-content');
+      var html = '';
+      if (cat.items) {
+        html = cat.items.map(function(it) {
+          var sendAttr = it.send ? ' data-send' : '';
+          var cls = it.send ? 'nai-cust-pill' : 'nai-cust-pill template';
+          return '<button class="' + cls + '" data-action="' + escapeHtml(it.action) + '"' + sendAttr + ' title="' + escapeHtml(it.desc) + '">'
+            + escapeHtml(it.label) + (it.send ? '' : ' \u270E') + '</button>';
+        }).join('');
+      }
+      if (cat.emptyNote) {
+        html += '<div class="nai-empty-sidebar" style="width:100%;margin-top:8px;">' + escapeHtml(cat.emptyNote) + '</div>';
+      }
+      content.innerHTML = html;
+    },
+
+    renderGrouped: function(key) {
+      var content = document.getElementById('nai-cust-sub-content');
+      var groups = this.categories[key].groups;
+      var html = '';
+      groups.forEach(function(g) {
+        html += '<div class="nai-cust-group-label" style="width:100%;">' + escapeHtml(g.label) + '</div>';
+        html += g.items.map(function(it) {
+          var sendAttr = it.send ? ' data-send' : '';
+          var cls = 'nai-cust-pill';
+          if (it.dim) cls += ' dim';
+          else if (!it.send) cls += ' template';
+          return '<button class="' + cls + '" data-action="' + escapeHtml(it.action) + '"' + sendAttr + ' title="' + escapeHtml(it.desc) + '">'
+            + escapeHtml(it.label) + (!it.send && !it.dim ? ' \u270E' : '') + '</button>';
+        }).join('');
+      });
+      content.innerHTML = html;
+    },
+
+    renderConnectors: function() {
+      var content = document.getElementById('nai-cust-sub-content');
+      var cat = this.categories.connectors;
+      var html = '<div class="nai-cust-group-label" style="width:100%;">Active</div>';
+      html += cat.configured.map(function(c) {
+        return '<button class="nai-cust-pill active" data-action="/status" data-send>'
+          + escapeHtml(c) + '</button>';
+      }).join('');
+      html += '<div class="nai-cust-group-label" style="width:100%;">Quick Dock</div>';
+      html += cat.dockable.map(function(c) {
+        return '<button class="nai-cust-pill" data-action="' + escapeHtml(c.action) + '" data-send>'
+          + escapeHtml(c.label) + '</button>';
+      }).join('');
+      html += '<div class="nai-cust-group-label" style="width:100%;">Available</div>';
+      html += cat.available.map(function(c) {
+        return '<button class="nai-cust-pill dim template" data-action="Help me set up the ' + c + ' connector">'
+          + escapeHtml(c) + ' \u270E</button>';
+      }).join('');
+      content.innerHTML = html;
+    },
+
+    renderModels: function() {
+      var content = document.getElementById('nai-cust-sub-content');
+      content.innerHTML = '<div class="nai-empty-sidebar" style="width:100%;">Loading models...</div>';
+      fetch('/api/models').then(function(r) { return r.json(); }).then(function(data) {
+        if (!data.models || data.models.length === 0) {
+          content.innerHTML = '<div class="nai-empty-sidebar" style="width:100%;">No models found. Is Ollama running?</div>';
+          return;
+        }
+        var activeModel = 'qwen3-coder:480b-cloud';
+        var html = data.models.map(function(m) {
+          var name = m.name;
+          var size = m.size ? (m.size / 1e9).toFixed(1) + 'GB' : '';
+          var isActive = name === activeModel ? ' active' : '';
+          var label = name + (size && size !== '0.0GB' ? ' (' + size + ')' : '');
+          return '<button class="nai-cust-pill' + isActive + '" data-action="Switch to the ' + name + ' model" title="' + (isActive ? 'Currently active' : 'Click to switch') + '">'
+            + escapeHtml(label) + (isActive ? ' \u2713' : '') + '</button>';
+        }).join('');
+        content.innerHTML = html;
+      }).catch(function() {
+        content.innerHTML = '<div class="nai-empty-sidebar" style="width:100%;">Failed to load models. Check Ollama.</div>';
+      });
+    }
+  };
+
   // ── NaiSidebar — DOM setup and rendering ─────────────────────────
   var NaiSidebar = {
     setup: function() {
@@ -635,6 +1045,7 @@ const INJECTED_SCRIPT = `
       this.bindEvents();
       this.refreshSessionList();
       this.setActiveView(state.activeView || 'explorations');
+      NaiCustomize.init();
       return true;
     },
 
@@ -1328,6 +1739,19 @@ const uiServer = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ ok: false, error: err.message }));
       }
     });
+    return;
+  }
+
+  if (req.url === "/api/models" && req.method === "GET") {
+    try {
+      const tagResp = await fetch("http://127.0.0.1:11434/api/tags");
+      const data = await tagResp.json();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(data));
+    } catch (err) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ models: [], error: err.message }));
+    }
     return;
   }
 
