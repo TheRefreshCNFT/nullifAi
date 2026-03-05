@@ -4,6 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 :: ── Paths ──────────────────────────────────────────────────────────────
 set "NULLCLAW_EXE=C:\Tools\nullclaw\2026.3.4\nullclaw.exe"
 set "BRIDGE=%~dp0nullifai-bridge.js"
+set "HIDDEN=%~dp0launch-hidden.vbs"
 set "PROJECT_DIR=%~dp0"
 
 :: ── Verify prerequisites ──────────────────────────────────────────────
@@ -24,12 +25,19 @@ if %errorlevel% NEQ 0 (
     exit /b 1
 )
 
-:: ── Start the bridge (serves both WebSocket + UI) ─────────────────────
-echo Starting nullifAi bridge...
-start "nullifAi Bridge" cmd /k "cd /d "%PROJECT_DIR%" && node "%BRIDGE%""
+:: ── Check if bridge is already running ──────────────────────────────
+powershell -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1',4173); $c.Close(); exit 0 } catch { exit 1 }" 2>nul
+if %errorlevel%==0 (
+    echo nullifAi is already running. Opening browser...
+    start "" "http://127.0.0.1:4173"
+    exit /b 0
+)
 
-:: ── Wait for bridge to be ready ───────────────────────────────────────
-echo Waiting for bridge to start...
+:: ── Start the bridge (hidden, no terminal window) ───────────────────
+echo Starting nullifAi bridge...
+cscript //nologo "%HIDDEN%"
+
+:: ── Wait for bridge to be ready ─────────────────────────────────────
 set RETRIES=0
 :wait_loop
 timeout /t 1 >nul
@@ -45,21 +53,8 @@ goto wait_loop
 :bridge_ready
 echo Bridge is ready.
 
-:: ── Open browser ──────────────────────────────────────────────────────
+:: ── Open browser ────────────────────────────────────────────────────
 :open_browser
 timeout /t 1 >nul
 start "" "http://127.0.0.1:4173"
-
-echo.
-echo ══════════════════════════════════════════════════════
-echo   nullifAi is running
-echo.
-echo   Chat UI:   http://127.0.0.1:4173
-echo   WebSocket: ws://127.0.0.1:32123/ws
-echo   Pairing:   123456
-echo.
-echo   The bridge handles everything - just open the UI,
-echo   connect to the WebSocket, and enter the pairing code.
-echo ══════════════════════════════════════════════════════
-echo.
-pause
+echo nullifAi is running. You can close this window.

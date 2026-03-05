@@ -1,3 +1,4 @@
 node_modules/
 nullclaw-chat-ui/
 *.log
+nullifai-bridge.log
