@@ -341,6 +341,91 @@ const INJECTED_SCRIPT = `
     border: 2px dashed var(--accent); padding: 40px 60px; border-radius: 8px;
     background: rgba(0, 255, 65, 0.05); text-shadow: 0 0 10px var(--accent);
   }
+  /* ── Sidebar Layout ─────────────────────────────────────────── */
+  #nai-content-wrapper {
+    display: flex; flex-direction: row; flex: 1; min-height: 0; overflow: hidden;
+  }
+  #nai-sidebar {
+    width: 260px; min-width: 260px; max-width: 260px;
+    background: #0d0d1a; border-right: 1px solid #222;
+    display: flex; flex-direction: column;
+    transition: width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease;
+    overflow: hidden; font-family: var(--font-mono, monospace); font-size: 12px; z-index: 50;
+  }
+  #nai-sidebar.collapsed { width: 44px; min-width: 44px; max-width: 44px; }
+  #nai-sidebar.collapsed .nai-sidebar-content { display: none; }
+  .nai-sidebar-toggle {
+    background: transparent; border: none; border-bottom: 1px solid #222;
+    color: #888; padding: 10px 12px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: color 0.2s, background 0.2s; flex-shrink: 0; height: 40px;
+  }
+  .nai-sidebar-toggle:hover { color: var(--accent, #0f0); background: rgba(255,255,255,0.03); }
+  .nai-new-adventure {
+    display: flex; align-items: center; gap: 8px;
+    margin: 10px 10px 6px; padding: 8px 12px;
+    background: transparent; border: 1px dashed rgba(0,255,65,0.3);
+    color: var(--accent, #0f0); font-size: 12px; font-family: var(--font-mono, monospace);
+    cursor: pointer; border-radius: 4px; text-transform: uppercase;
+    letter-spacing: 1px; font-weight: 700; transition: all 0.2s;
+  }
+  .nai-new-adventure:hover { background: rgba(0,255,65,0.05); border-color: var(--accent, #0f0); }
+  .nai-sidebar-nav {
+    display: flex; border-bottom: 1px solid #222; flex-shrink: 0;
+  }
+  .nai-nav-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 8px 4px 6px; background: transparent; border: none;
+    border-bottom: 2px solid transparent; color: #666;
+    font-size: 9px; font-family: var(--font-mono, monospace);
+    cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .nai-nav-btn:hover { color: #aaa; background: rgba(255,255,255,0.03); }
+  .nai-nav-btn.active { color: var(--accent, #0f0); border-bottom-color: var(--accent, #0f0); }
+  .nai-view { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .nai-session-list { padding: 4px 0; }
+  .nai-session-item {
+    display: flex; align-items: flex-start; flex-direction: column;
+    padding: 8px 12px; cursor: pointer; border-left: 2px solid transparent;
+    transition: all 0.15s; position: relative;
+  }
+  .nai-session-item:hover { background: rgba(255,255,255,0.03); }
+  .nai-session-item.active { background: rgba(0,255,65,0.05); border-left-color: var(--accent, #0f0); }
+  .nai-session-title {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #ccc; font-size: 12px; width: 100%;
+  }
+  .nai-session-meta { font-size: 9px; color: #555; margin-top: 2px; }
+  .nai-session-delete {
+    display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    background: transparent; border: none; color: #f87171; cursor: pointer;
+    font-size: 14px; padding: 2px 4px;
+  }
+  .nai-session-item:hover .nai-session-delete { display: block; }
+  .nai-session-delete:hover { text-shadow: 0 0 5px #f87171; }
+  .nai-search-box { padding: 10px; border-bottom: 1px solid #222; }
+  .nai-search-box input {
+    width: 100%; padding: 6px 10px; font-size: 12px; box-sizing: border-box;
+    background: #111; border: 1px solid #333; color: #ccc;
+    font-family: var(--font-mono, monospace); border-radius: 3px;
+  }
+  .nai-search-box input:focus { border-color: var(--accent, #0f0); outline: none; }
+  .nai-search-result {
+    padding: 8px 12px; cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.15s;
+  }
+  .nai-search-result:hover { background: rgba(255,255,255,0.03); }
+  .nai-result-title { font-weight: 700; color: var(--accent, #0f0); font-size: 11px; margin-bottom: 4px; }
+  .nai-result-snippet { font-size: 11px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nai-search-result mark { background: rgba(0,255,65,0.3); color: #fff; padding: 0 2px; border-radius: 2px; }
+  #nai-content-wrapper .chat-screen { flex: 1; min-width: 0; }
+  /* Restored message bubbles (no Svelte hash) */
+  .nai-restored { width: 100%; padding: 8px 16px; margin: 0; border-left: 2px solid transparent; }
+  .nai-restored.user { border-left-color: var(--accent-dim, rgba(0,255,65,0.3)); background: rgba(0,0,0,0.15); }
+  .nai-restored.assistant { border-left-color: var(--warning, #fa0); background: rgba(255,170,0,0.03); }
+  .nai-restored .nai-meta { display: flex; gap: 6px; font-size: 11px; margin-bottom: 4px; opacity: 0.7; }
+  .nai-restored .nai-msg-content { font-size: 14px; line-height: 1.6; word-wrap: break-word; white-space: pre-wrap; color: #ccc; }
+  .nai-empty-sidebar { padding: 20px 12px; color: #555; text-align: center; font-size: 11px; }
 </style>
 <div id="nullifai-control">
   <div style="display:flex;align-items:center;">
@@ -352,8 +437,383 @@ const INJECTED_SCRIPT = `
     <button class="launch" id="nai-launch" onclick="nullifaiLaunch()" style="display:none">Launch</button>
   </div>
 </div>
+<div id="nai-sidebar" class="nai-sidebar" style="display:none">
+  <button id="nai-sidebar-toggle" class="nai-sidebar-toggle" title="Toggle sidebar">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <div id="nai-sidebar-content" class="nai-sidebar-content">
+    <button id="nai-new-adventure" class="nai-new-adventure">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+      <span>New Adventure</span>
+    </button>
+    <div class="nai-sidebar-nav">
+      <button class="nai-nav-btn active" data-view="explorations">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <span>Explorations</span>
+      </button>
+      <button class="nai-nav-btn" data-view="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <span>Search</span>
+      </button>
+      <button class="nai-nav-btn" data-view="customize">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001.08 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1.08z"/></svg>
+        <span>Customize</span>
+      </button>
+    </div>
+    <div id="nai-view-explorations" class="nai-view active">
+      <div id="nai-session-list" class="nai-session-list"></div>
+    </div>
+    <div id="nai-view-search" class="nai-view" style="display:none">
+      <div class="nai-search-box"><input type="text" id="nai-search-input" placeholder="Search explorations..." /></div>
+      <div id="nai-search-results"></div>
+    </div>
+    <div id="nai-view-customize" class="nai-view" style="display:none">
+      <div style="padding:40px 16px;text-align:center;">
+        <div style="font-size:16px;color:var(--accent,#0f0);margin-bottom:8px;font-weight:700;">Customization Center</div>
+        <div style="color:#555;font-size:11px;">Coming soon.</div>
+      </div>
+    </div>
+  </div>
+</div>
 <script>
 (function() {
+  // ── Utility ──────────────────────────────────────────────────────
+  function escapeHtml(str) {
+    var d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+  }
+
+  // ── WebSocket constructor wrap (captures assistant messages) ─────
+  var _OrigWebSocket = window.WebSocket;
+  var _assistantBuffer = {};
+  window.WebSocket = function(url, protocols) {
+    var ws = protocols ? new _OrigWebSocket(url, protocols) : new _OrigWebSocket(url);
+    ws.addEventListener('message', function(event) {
+      try {
+        var msg = JSON.parse(event.data);
+        if (!msg || !msg.type) return;
+        var sid = msg.session_id || 'default';
+        if (msg.type === 'assistant_chunk') {
+          if (!_assistantBuffer[sid]) _assistantBuffer[sid] = '';
+          if (msg.payload && msg.payload.content) _assistantBuffer[sid] += msg.payload.content;
+        }
+        if (msg.type === 'assistant_final') {
+          var content = (msg.payload && msg.payload.content) || _assistantBuffer[sid] || '';
+          if (content && typeof NaiSessions !== 'undefined' && NaiSessions.currentSessionId) {
+            NaiStorage.addMessage(NaiSessions.currentSessionId, 'assistant', content);
+            if (typeof NaiSidebar !== 'undefined') NaiSidebar.refreshSessionList();
+          }
+          delete _assistantBuffer[sid];
+        }
+      } catch(e) {}
+    });
+    return ws;
+  };
+  window.WebSocket.prototype = _OrigWebSocket.prototype;
+  window.WebSocket.CONNECTING = _OrigWebSocket.CONNECTING;
+  window.WebSocket.OPEN = _OrigWebSocket.OPEN;
+  window.WebSocket.CLOSING = _OrigWebSocket.CLOSING;
+  window.WebSocket.CLOSED = _OrigWebSocket.CLOSED;
+
+  // ── NaiStorage — localStorage persistence ────────────────────────
+  var NaiStorage = {
+    SIDEBAR_KEY: 'nullifai_sidebar_state',
+    INDEX_KEY: 'nullifai_sessions_index',
+    SESSION_PREFIX: 'nullifai_session_',
+
+    getSidebarState: function() {
+      try { var r = localStorage.getItem(this.SIDEBAR_KEY); return r ? JSON.parse(r) : { collapsed: false, activeSessionId: null, activeView: 'explorations' }; }
+      catch(e) { return { collapsed: false, activeSessionId: null, activeView: 'explorations' }; }
+    },
+    saveSidebarState: function(state) {
+      try { localStorage.setItem(this.SIDEBAR_KEY, JSON.stringify(state)); } catch(e) {}
+    },
+    getSessionIndex: function() {
+      try { var r = localStorage.getItem(this.INDEX_KEY); return r ? JSON.parse(r) : []; }
+      catch(e) { return []; }
+    },
+    saveSessionIndex: function(index) {
+      try { localStorage.setItem(this.INDEX_KEY, JSON.stringify(index)); } catch(e) {}
+    },
+    getSession: function(id) {
+      try { var r = localStorage.getItem(this.SESSION_PREFIX + id); return r ? JSON.parse(r) : null; }
+      catch(e) { return null; }
+    },
+    saveSession: function(session) {
+      try { localStorage.setItem(this.SESSION_PREFIX + session.id, JSON.stringify(session)); } catch(e) {}
+    },
+    deleteSession: function(id) {
+      try { localStorage.removeItem(this.SESSION_PREFIX + id); } catch(e) {}
+    },
+    createSession: function(id) {
+      var now = Date.now();
+      var session = { id: id, title: 'New Adventure', createdAt: now, updatedAt: now, messages: [] };
+      this.saveSession(session);
+      var index = this.getSessionIndex();
+      index.unshift({ id: id, title: session.title, createdAt: now, updatedAt: now, messageCount: 0 });
+      this.saveSessionIndex(index);
+      return session;
+    },
+    addMessage: function(sessionId, role, content) {
+      var session = this.getSession(sessionId);
+      if (!session) session = this.createSession(sessionId);
+      var msg = { role: role, content: content, timestamp: Date.now() };
+      session.messages.push(msg);
+      session.updatedAt = msg.timestamp;
+      if (session.title === 'New Adventure' && role === 'user' && content.trim()) {
+        var clean = content.trim().replace(/\\[\\w+:[^\\]]*\\]\\n---[\\s\\S]*?---\\n\\n/g, '').trim();
+        if (!clean) clean = content.trim();
+        session.title = clean.substring(0, 40) + (clean.length > 40 ? '...' : '');
+      }
+      this.saveSession(session);
+      var index = this.getSessionIndex();
+      var entry = index.find(function(e) { return e.id === sessionId; });
+      if (entry) { entry.title = session.title; entry.updatedAt = session.updatedAt; entry.messageCount = session.messages.length; }
+      this.saveSessionIndex(index);
+      return msg;
+    }
+  };
+
+  // ── NaiSessions — session lifecycle ──────────────────────────────
+  var NaiSessions = {
+    currentSessionId: null,
+    init: function() {
+      var state = NaiStorage.getSidebarState();
+      if (state.activeSessionId && NaiStorage.getSession(state.activeSessionId)) {
+        this.currentSessionId = state.activeSessionId;
+      } else {
+        this.newSession();
+      }
+    },
+    generateId: function() {
+      return Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 8);
+    },
+    newSession: function() {
+      var id = this.generateId();
+      NaiStorage.createSession(id);
+      this.currentSessionId = id;
+      var state = NaiStorage.getSidebarState();
+      state.activeSessionId = id;
+      NaiStorage.saveSidebarState(state);
+      return id;
+    },
+    switchSession: function(id) {
+      this.currentSessionId = id;
+      var state = NaiStorage.getSidebarState();
+      state.activeSessionId = id;
+      NaiStorage.saveSidebarState(state);
+    },
+    deleteSession: function(id) {
+      NaiStorage.deleteSession(id);
+      var index = NaiStorage.getSessionIndex();
+      index = index.filter(function(e) { return e.id !== id; });
+      NaiStorage.saveSessionIndex(index);
+      if (this.currentSessionId === id) {
+        if (index.length > 0) this.switchSession(index[0].id);
+        else this.newSession();
+      }
+    }
+  };
+
+  // ── NaiSidebar — DOM setup and rendering ─────────────────────────
+  var NaiSidebar = {
+    setup: function() {
+      var chatScreen = document.querySelector('.chat-screen');
+      var sidebar = document.getElementById('nai-sidebar');
+      if (!chatScreen || !sidebar) return false;
+
+      // Create flex-row wrapper
+      var wrapper = document.createElement('div');
+      wrapper.id = 'nai-content-wrapper';
+      chatScreen.parentNode.insertBefore(wrapper, chatScreen);
+      wrapper.appendChild(sidebar);
+      wrapper.appendChild(chatScreen);
+      sidebar.style.display = '';
+
+      // Restore state
+      var state = NaiStorage.getSidebarState();
+      if (state.collapsed) sidebar.classList.add('collapsed');
+      this.bindEvents();
+      this.refreshSessionList();
+      this.setActiveView(state.activeView || 'explorations');
+      return true;
+    },
+
+    bindEvents: function() {
+      var self = this;
+      document.getElementById('nai-sidebar-toggle').addEventListener('click', function() {
+        var sb = document.getElementById('nai-sidebar');
+        sb.classList.toggle('collapsed');
+        var state = NaiStorage.getSidebarState();
+        state.collapsed = sb.classList.contains('collapsed');
+        NaiStorage.saveSidebarState(state);
+      });
+
+      document.getElementById('nai-new-adventure').addEventListener('click', function() {
+        NaiSessions.newSession();
+        self.clearChatDOM();
+        self.refreshSessionList();
+      });
+
+      document.querySelectorAll('.nai-nav-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          self.setActiveView(btn.getAttribute('data-view'));
+        });
+      });
+
+      var searchInput = document.getElementById('nai-search-input');
+      if (searchInput) {
+        var debounce = null;
+        searchInput.addEventListener('input', function() {
+          clearTimeout(debounce);
+          debounce = setTimeout(function() { self.performSearch(searchInput.value.trim()); }, 300);
+        });
+      }
+
+      document.getElementById('nai-session-list').addEventListener('click', function(e) {
+        var del = e.target.closest('.nai-session-delete');
+        if (del) {
+          e.stopPropagation();
+          var id = del.getAttribute('data-id');
+          if (confirm('Delete this adventure?')) {
+            NaiSessions.deleteSession(id);
+            self.loadSessionIntoDOM(NaiSessions.currentSessionId);
+            self.refreshSessionList();
+          }
+          return;
+        }
+        var item = e.target.closest('.nai-session-item');
+        if (item) {
+          var id = item.getAttribute('data-id');
+          if (id !== NaiSessions.currentSessionId) {
+            NaiSessions.switchSession(id);
+            self.loadSessionIntoDOM(id);
+            self.refreshSessionList();
+          }
+        }
+      });
+    },
+
+    setActiveView: function(viewName) {
+      document.querySelectorAll('.nai-nav-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-view') === viewName);
+      });
+      ['explorations', 'search', 'customize'].forEach(function(v) {
+        var el = document.getElementById('nai-view-' + v);
+        if (el) el.style.display = v === viewName ? '' : 'none';
+      });
+      var state = NaiStorage.getSidebarState();
+      state.activeView = viewName;
+      NaiStorage.saveSidebarState(state);
+    },
+
+    refreshSessionList: function() {
+      var list = document.getElementById('nai-session-list');
+      if (!list) return;
+      var index = NaiStorage.getSessionIndex();
+      var activeId = NaiSessions.currentSessionId;
+      if (index.length === 0) {
+        list.innerHTML = '<div class="nai-empty-sidebar">No adventures yet</div>';
+        return;
+      }
+      list.innerHTML = index.map(function(s) {
+        var active = s.id === activeId ? ' active' : '';
+        var d = new Date(s.updatedAt);
+        var ts = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+        return '<div class="nai-session-item' + active + '" data-id="' + s.id + '">'
+          + '<div class="nai-session-title">' + escapeHtml(s.title) + '</div>'
+          + '<div class="nai-session-meta">' + ts + ' &middot; ' + (s.messageCount || 0) + ' msgs</div>'
+          + '<button class="nai-session-delete" data-id="' + s.id + '" title="Delete">&times;</button>'
+          + '</div>';
+      }).join('');
+    },
+
+    clearChatDOM: function() {
+      var msgs = document.querySelector('.messages');
+      if (!msgs) return;
+      msgs.querySelectorAll('.bubble-container, .nai-restored').forEach(function(b) { b.remove(); });
+      // Show empty state if it exists
+      var empty = msgs.querySelector('[class*="empty"]');
+      if (empty) empty.style.display = '';
+    },
+
+    loadSessionIntoDOM: function(sessionId) {
+      this.clearChatDOM();
+      var session = NaiStorage.getSession(sessionId);
+      if (!session || session.messages.length === 0) return;
+      var msgs = document.querySelector('.messages');
+      if (!msgs) return;
+      // Hide empty state
+      var empty = msgs.querySelector('[class*="empty"]');
+      if (empty) empty.style.display = 'none';
+
+      session.messages.forEach(function(msg) {
+        var el = document.createElement('div');
+        el.className = 'nai-restored ' + msg.role;
+
+        var meta = document.createElement('div');
+        meta.className = 'nai-meta';
+        var prompt = msg.role === 'user' ? '<span style="color:var(--accent,#0f0);font-weight:700">&gt;</span>' : '<span style="color:var(--warning,#fa0);font-weight:700">$</span>';
+        var ts = new Date(msg.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        meta.innerHTML = prompt + '<span style="color:#555">::</span><span style="color:#555;font-size:10px">' + ts + '</span>';
+
+        var content = document.createElement('div');
+        content.className = 'nai-msg-content';
+        content.textContent = msg.content;
+
+        el.appendChild(meta);
+        el.appendChild(content);
+        msgs.appendChild(el);
+      });
+      msgs.scrollTop = msgs.scrollHeight;
+    },
+
+    performSearch: function(query) {
+      var resultsEl = document.getElementById('nai-search-results');
+      if (!resultsEl) return;
+      if (!query || query.length < 2) {
+        resultsEl.innerHTML = '<div class="nai-empty-sidebar">Type at least 2 characters</div>';
+        return;
+      }
+      var index = NaiStorage.getSessionIndex();
+      var results = [];
+      var lq = query.toLowerCase();
+      index.forEach(function(entry) {
+        var session = NaiStorage.getSession(entry.id);
+        if (!session) return;
+        session.messages.forEach(function(msg) {
+          var pos = msg.content.toLowerCase().indexOf(lq);
+          if (pos === -1) return;
+          var start = Math.max(0, pos - 30);
+          var end = Math.min(msg.content.length, pos + query.length + 30);
+          var snippet = (start > 0 ? '...' : '') + msg.content.substring(start, end) + (end < msg.content.length ? '...' : '');
+          results.push({ sessionId: entry.id, sessionTitle: entry.title, snippet: snippet, matchPos: pos - start + (start > 0 ? 3 : 0), matchLen: query.length });
+        });
+      });
+      if (results.length === 0) {
+        resultsEl.innerHTML = '<div class="nai-empty-sidebar">No results found</div>';
+        return;
+      }
+      results = results.slice(0, 50);
+      var self = this;
+      resultsEl.innerHTML = results.map(function(r) {
+        var esc = escapeHtml(r.snippet);
+        var hl = esc.substring(0, r.matchPos) + '<mark>' + esc.substring(r.matchPos, r.matchPos + r.matchLen) + '</mark>' + esc.substring(r.matchPos + r.matchLen);
+        return '<div class="nai-search-result" data-session="' + r.sessionId + '">'
+          + '<div class="nai-result-title">' + escapeHtml(r.sessionTitle) + '</div>'
+          + '<div class="nai-result-snippet">' + hl + '</div></div>';
+      }).join('');
+      resultsEl.querySelectorAll('.nai-search-result').forEach(function(el) {
+        el.addEventListener('click', function() {
+          var sid = el.getAttribute('data-session');
+          NaiSessions.switchSession(sid);
+          self.loadSessionIntoDOM(sid);
+          self.refreshSessionList();
+          self.setActiveView('explorations');
+        });
+      });
+    }
+  };
+
   // ── Control bar logic ─────────────────────────────────────────────
   function updateUI(alive) {
     var dot = document.getElementById('nai-dot');
@@ -769,8 +1229,24 @@ const INJECTED_SCRIPT = `
         }
       } catch(e) {}
     }
+    // Capture user messages for sidebar persistence
+    try {
+      var _parsed = JSON.parse(data);
+      if (_parsed.type === 'user_message' && _parsed.payload && _parsed.payload.content && NaiSessions.currentSessionId) {
+        NaiStorage.addMessage(NaiSessions.currentSessionId, 'user', _parsed.payload.content);
+        NaiSidebar.refreshSessionList();
+      }
+    } catch(e) {}
     return _origWsSend.call(this, data);
   };
+
+  // ── Sidebar initialization ────────────────────────────────────────
+  NaiSessions.init();
+  var sidebarTries = 0;
+  var sidebarTimer = setInterval(function() {
+    sidebarTries++;
+    if (NaiSidebar.setup() || sidebarTries > 50) clearInterval(sidebarTimer);
+  }, 200);
 })();
 </script>
 `;
