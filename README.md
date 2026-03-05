@@ -6,9 +6,8 @@ that serves the chat UI and handles communication.
 ## Quick Start
 
 1. **Double-click the desktop shortcut** (or run `launch-nullifai.cmd`)
-2. Browser opens to `http://127.0.0.1:4173`
-3. Enter pairing code: `123456`
-4. Chat!
+2. Browser opens — auto-connects, no pairing needed
+3. Chat!
 
 ## Architecture
 
@@ -39,6 +38,13 @@ Windows: it uses `posix.read()` which maps to `NtReadFile` instead of
 The bridge bypasses this by running nullclaw in CLI agent mode and serving
 WebSocket via the battle-tested Node.js `ws` package.
 
+## Features
+
+- **Auto-pairing** — dynamic pairing code, auto-filled on page load
+- **Hidden launcher** — no terminal window, runs in background
+- **Kill/Launch controls** — control bar at top of UI
+- **Streaming responses** — chunks sent as they arrive from the LLM
+
 ## Components
 
 | Component | Location | Port |
@@ -59,13 +65,13 @@ WebSocket via the battle-tested Node.js `ws` package.
 - nullclaw config: `~/.nullclaw/config.json`
 - Default model: `ollama/qwen3-coder:480b-cloud`
 - Available models: `qwen3:8b`, `qwen3-coder:30b`, `qwen3-coder:480b-cloud`
-- Pairing code: `123456` (hardcoded for local use)
 
 ## File Structure
 
 ```
 nullifAi/
   launch-nullifai.cmd    # One-click launcher (desktop shortcut target)
+  launch-hidden.vbs      # Runs bridge without terminal window
   nullifai-bridge.js     # Node.js WebSocket bridge
   package.json           # npm project (ws dependency)
   node_modules/          # npm packages
@@ -74,13 +80,14 @@ nullifAi/
   README.md              # This file
 ```
 
-## WebChannel v1 Protocol
+## API Endpoints
 
-The bridge implements the WebChannel v1 protocol:
-
-1. **Pairing**: Client sends `pairing_request` with code, gets back JWT token
-2. **Messaging**: Client sends `user_message` with token, gets `assistant_chunk` stream + `assistant_final`
-3. **Errors**: Bridge sends `error` events with codes
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Bridge status (running/stopped, session count) |
+| `/api/pairing-code` | GET | Current dynamic pairing code |
+| `/api/kill` | POST | Stop WebSocket server (UI stays up) |
+| `/api/launch` | POST | Restart WebSocket server |
 
 ## Development
 

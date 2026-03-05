@@ -2,3 +2,15 @@ node_modules/
 nullclaw-chat-ui/
 *.log
 nullifai-bridge.log
+*.db
+*.db-journal
+.DS_Store
+.env
+.env.*
+!.env.example
+*.swp
+*~
+*.bak
+.idea/
+.vscode/
+.cursor/
