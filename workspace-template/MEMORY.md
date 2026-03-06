@@ -8,38 +8,56 @@ _Curated knowledge. Only load in main sessions (direct chats with your human). D
 - **OS:** Windows 11 Home
 - **Machine user:** thisc
 - **Home:** C:\Users\thisc
-- **nullclaw binary:** C:\Tools\nullclaw\2026.3.4\nullclaw.exe
+- **nullclaw binary:** C:\Tools\nullclaw\2026.3.4\nullclaw.exe (custom patched build)
+- **nullclaw source:** C:\Users\thisc\Documents\Projects\myAis\null\nullclaw\src
 - **nullclaw workspace:** C:\Users\thisc\.nullclaw\workspace\ (this directory)
 - **nullclaw config:** C:\Users\thisc\.nullclaw\config.json
+- **Default model:** xai/grok-4-1-fast-non-reasoning (Grok 4.1 by xAI)
+- **Reasoning model:** xai/grok-4-1-fast-reasoning (auto-used for complex tasks)
+- **Local fallback:** ollama/qwen3:4b (2.5GB, runs on laptop)
 - **Ollama:** http://127.0.0.1:11434
-- **Default model:** ollama/qwen3-coder:480b-cloud
-- **Available models:** qwen3:8b (5.2GB), qwen3-coder:30b (18.6GB), qwen3-coder:480b-cloud, moondream (1.7GB vision)
+- **Available local models:** qwen3:4b (2.5GB), qwen3:8b (5.2GB), qwen3-coder:30b (18.6GB), moondream (1.7GB vision)
 
 ## Active Projects
 
 ### nullifAi
-- **What:** Local AI agent platform — nullclaw + Ollama + Node.js bridge + Svelte 5 chat UI
+- **What:** Local AI agent platform — nullclaw + Grok + Node.js bridge + Svelte 5 chat UI + Discord bot
 - **Repo:** C:\Users\thisc\Documents\Projects\myAis\null\agents\nullifAi\
 - **GitHub:** https://github.com/TheRefreshCNFT/nullifAi
-- **Current version:** v1.4.0
-- **Single file:** nullifai-bridge.js (~1830 lines) — all server logic and UI customizations
-- **Architecture:** Browser → WebSocket → bridge → persistent stdin/stdout → nullclaw → Ollama
+- **Current version:** v1.5.0
+- **Bridge:** nullifai-bridge.js (~1830 lines) — web UI only
+- **Gateway:** nullclaw gateway on port 32124 — Discord + all other channels
+- **Architecture:** Web UI → bridge (32123) → nullclaw. Discord → gateway (32124) → nullclaw.
+
+## File Access
+
+- **`file_read` works EVERYWHERE now** — `allowed_paths: ["*"]` is configured
+- You can read ANY file on the system (except C:\Windows, C:\Program Files, C:\ProgramData)
+- Use absolute paths: `/file_read C:\Users\thisc\Documents\somefile.txt`
+- Or relative workspace paths: `/file_read SOUL.md`
+- `/shell type <path>` still works as alternative but `file_read` is preferred now
 
 ## Known Limitations
 
-- `file_read` is workspace-only regardless of config. Use `/shell type <path>` for files outside workspace.
 - nullclaw silently ignores unknown config keys — only use: `autonomy`, `security`, `models`, `agents`, `gateway`, `channels`
 - `/think on` is invalid — use `/think high` or specific levels
 - `/reasoning` is wrong — the command is `/reason`
-- No skills ecosystem available yet
-- LLM may return empty responses for some tool operations
+- HEARTBEAT.md must stay comments-only — actual tasks cause HEARTBEAT_OK spam
+- Discord replies work (custom binary patch), but only for replies to bot's own messages
 
 ## Configured Settings (Auto-Applied on Session Start)
 
-The bridge auto-sends these on every session:
+The bridge auto-sends these on every web session:
 - `/think high` — deep reasoning enabled
 - `/reason on` — chain-of-thought enabled
 - `/exec security=full` — unrestricted shell access
+
+## Discord Bot
+
+- **Bot name:** iykyAi
+- **Guild:** 878250798528745542
+- **Trigger:** @mention OR reply to bot's message
+- **Keep it short:** 2-3 sentences max on Discord unless asked for detail
 
 ## Reference Files
 

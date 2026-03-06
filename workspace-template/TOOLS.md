@@ -6,15 +6,18 @@ Your available tools and how to use them effectively. Reference this when you ne
 ## File System Tools
 
 ### `/file_read <path>`
-Reads file contents. **Workspace-only** — will refuse paths outside `~/.nullclaw/workspace/`.
+Reads file contents. **Works with absolute paths AND workspace-relative paths.**
 ```
-/file_read SOUL.md                    # relative to workspace
-/file_read memory/2026-03-05.md       # subdirectories work
+/file_read SOUL.md                                    # relative to workspace
+/file_read memory/2026-03-05.md                       # subdirectories work
+/file_read C:\Users\thisc\Documents\somefile.txt      # absolute path — works!
+/file_read C:\Users\thisc\.nullclaw\config.json       # config files — works!
 ```
-**Workaround for files outside workspace:** Use `/shell type <path>` instead.
+**What's blocked:** System directories only (C:\Windows, C:\Program Files, C:\ProgramData, C:\System32, C:\Recovery).
+**Everything else is fair game.** You have `allowed_paths: ["*"]` configured.
 
 ### `/file_write <path> <content>`
-Creates or overwrites a file.
+Creates or overwrites a file. Works in workspace and allowed paths.
 ```
 /file_write notes.md # My Notes\n\nSome content here.
 ```
@@ -22,13 +25,12 @@ Creates or overwrites a file.
 ### `/file_edit <path>`
 Edit an existing file. Opens in-place editing mode.
 
-### Reading Any File (The Shell Workaround)
-`file_read` is restricted to workspace. For anything outside:
+### Shell Alternative (when file tools fail)
+If a file tool gives you trouble, `/shell` always works:
 ```
-/shell type "C:\Users\thisc\Documents\somefile.txt"      # Windows
-/shell cat /home/user/somefile.txt                        # Linux
+/shell type "C:\Users\thisc\Documents\somefile.txt"      # Windows read
+/shell cat /home/user/somefile.txt                        # Linux read
 ```
-This works with `security=full` (auto-configured on session start).
 
 ## System Tools
 
@@ -46,7 +48,6 @@ Run any shell command. This is your most powerful tool.
 - Quote paths with spaces: `type "C:\My Files\doc.txt"`
 - Chain commands: `cd /d C:\project && dir`
 - Redirect output: `command > file.txt 2>&1`
-- Shell is the escape hatch when other tools are limited
 
 ### `/git <operation>`
 Git operations. Shorthand for common git commands.
@@ -167,9 +168,9 @@ To enable: would need config changes and possibly binary support.
 
 ## Tool Combinations (Patterns That Work)
 
-**Read a file outside workspace, store key info:**
+**Read any file, store key info:**
 ```
-/shell type "C:\path\to\config.json"
+/file_read C:\path\to\config.json
 /memory store Config at C:\path has setting X=Y
 ```
 
@@ -186,18 +187,11 @@ To enable: would need config changes and possibly binary support.
 
 **Debug a problem:**
 ```
-/shell type "C:\path\to\logfile.log"    # read the logs
-/memory recall similar issue             # check if seen before
+/file_read C:\path\to\logfile.log              # read the logs
+/memory recall similar issue                    # check if seen before
 # fix the issue
-/memory store Fixed X by doing Y         # remember for next time
+/memory store Fixed X by doing Y               # remember for next time
 ```
-
-## Environment Notes
-
-_Add your local specifics here as you learn them:_
-- Camera names, SSH hosts, voice preferences, device nicknames
-- Paths you access frequently
-- User-specific shortcuts or conventions
 
 ---
 
