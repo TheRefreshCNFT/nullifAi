@@ -21,6 +21,7 @@ const path = require("path");
 
 // ── Config ──────────────────────────────────────────────────────────────
 const NULLCLAW_EXE = process.env.NULLCLAW_EXE || "C:\\Tools\\nullclaw\\2026.3.4\\nullclaw.exe";
+const NULLCLAW_CONFIG = process.env.NULLCLAW_CONFIG || path.join(require("os").homedir(), ".nullclaw", "config.json");
 const WS_PORT = parseInt(process.env.WS_PORT || "32123", 10);
 const UI_PORT = parseInt(process.env.UI_PORT || "4173", 10);
 const UI_DIR = process.env.UI_DIR || path.join(__dirname, "nullclaw-chat-ui", "build");
@@ -834,6 +835,13 @@ const INJECTED_SCRIPT = `
             { label: '/approve', desc: 'Approve pending', action: '/approve', send: true },
             { label: '/elevated', desc: 'Elevated mode', action: '/elevated', send: true },
             { label: '/context', desc: 'Context settings', action: '/context', send: true }
+          ]},
+          { label: 'Gateway Config (all channels)', items: [
+            { label: 'File Access: Everywhere', desc: 'allowed_paths=["*"] — read files anywhere', configKey: 'autonomy.allowed_paths', configValues: [["*"], []], configLabels: ['Everywhere', 'Workspace Only'], toggle: true },
+            { label: 'Shell: No Approval', desc: 'Skip approval for medium-risk commands', configKey: 'autonomy.require_approval_for_medium_risk', configValues: [false, true], configLabels: ['No Approval', 'Require Approval'], toggle: true },
+            { label: 'High-Risk Commands: Allowed', desc: 'Allow destructive shell commands', configKey: 'autonomy.block_high_risk_commands', configValues: [false, true], configLabels: ['Allowed', 'Blocked'], toggle: true },
+            { label: 'Autonomy: Full', desc: 'Agent autonomy level', configKey: 'autonomy.level', configValues: ['full', 'supervised', 'read_only'], configLabels: ['Full', 'Supervised', 'Read-Only'], toggle: true },
+            { label: '\u21BB Restart Gateway', desc: 'Apply config changes to Discord & all channels', configAction: 'restart-gateway' }
           ]}
         ]
       },
@@ -851,7 +859,7 @@ const INJECTED_SCRIPT = `
         desc: 'Built-in tools the agent can use during conversations.',
         groups: [
           { label: 'File System', items: [
-            { label: '/file_read', desc: 'Read file (workspace only)', action: '/file_read ' },
+            { label: '/file_read', desc: 'Read any file', action: '/file_read ' },
             { label: '/file_write', desc: 'Write to a file', action: '/file_write ' },
             { label: '/file_edit', desc: 'Edit a file', action: '/file_edit ' },
             { label: '/shell type', desc: 'Read any file via shell', action: '/shell type ' }
@@ -925,6 +933,34 @@ const INJECTED_SCRIPT = `
       document.getElementById('nai-cust-sub-content').addEventListener('click', function(e) {
         var pill = e.target.closest('[data-action]');
         if (pill) injectToInput(pill.getAttribute('data-action'), pill.hasAttribute('data-send'));
+        // Config toggle pills
+        var cfgPill = e.target.closest('[data-config-key]');
+        if (cfgPill) {
+          var key = cfgPill.getAttribute('data-config-key');
+          var values = JSON.parse(cfgPill.getAttribute('data-config-values'));
+          var labels = JSON.parse(cfgPill.getAttribute('data-config-labels'));
+          var curIdx = parseInt(cfgPill.getAttribute('data-config-idx') || '0');
+          var nextIdx = (curIdx + 1) % values.length;
+          fetch('/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ path: key, value: values[nextIdx] }) })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d.ok) {
+                cfgPill.setAttribute('data-config-idx', nextIdx);
+                cfgPill.textContent = labels[nextIdx];
+                cfgPill.title = key + ' = ' + JSON.stringify(values[nextIdx]);
+                cfgPill.className = nextIdx === 0 ? 'nai-cust-pill active' : 'nai-cust-pill dim';
+              }
+            });
+        }
+        // Gateway restart button
+        var restartPill = e.target.closest('[data-config-restart]');
+        if (restartPill) {
+          restartPill.textContent = 'Restarting...';
+          restartPill.classList.add('dim');
+          fetch('/api/gateway/restart', { method: 'POST' }).then(function() {
+            setTimeout(function() { restartPill.textContent = '\u21BB Restart Gateway'; restartPill.classList.remove('dim'); }, 5000);
+          });
+        }
       });
     },
 
@@ -965,18 +1001,55 @@ const INJECTED_SCRIPT = `
       var content = document.getElementById('nai-cust-sub-content');
       var groups = this.categories[key].groups;
       var html = '';
+      var configLoaded = false;
+      var configPills = [];
       groups.forEach(function(g) {
         html += '<div class="nai-cust-group-label" style="width:100%;">' + escapeHtml(g.label) + '</div>';
         html += g.items.map(function(it) {
+          // Config toggle pill
+          if (it.toggle && it.configKey) {
+            var id = 'cfg-' + it.configKey.replace(/\./g, '-');
+            configPills.push({ id: id, key: it.configKey, values: it.configValues, labels: it.configLabels });
+            return '<button class="nai-cust-pill active" id="' + id + '" data-config-key="' + escapeHtml(it.configKey) + '" data-config-values="' + escapeHtml(JSON.stringify(it.configValues)) + '" data-config-labels="' + escapeHtml(JSON.stringify(it.configLabels)) + '" data-config-idx="0" title="' + escapeHtml(it.desc) + '">'
+              + escapeHtml(it.configLabels[0]) + '</button>';
+          }
+          // Gateway restart button
+          if (it.configAction === 'restart-gateway') {
+            return '<button class="nai-cust-pill" data-config-restart="true" title="' + escapeHtml(it.desc) + '">'
+              + escapeHtml(it.label) + '</button>';
+          }
+          // Normal pill
           var sendAttr = it.send ? ' data-send' : '';
           var cls = 'nai-cust-pill';
           if (it.dim) cls += ' dim';
           else if (!it.send) cls += ' template';
-          return '<button class="' + cls + '" data-action="' + escapeHtml(it.action) + '"' + sendAttr + ' title="' + escapeHtml(it.desc) + '">'
+          return '<button class="' + cls + '" data-action="' + escapeHtml(it.action || '') + '"' + sendAttr + ' title="' + escapeHtml(it.desc) + '">'
             + escapeHtml(it.label) + (!it.send && !it.dim ? ' \u270E' : '') + '</button>';
         }).join('');
       });
       content.innerHTML = html;
+      // Load current config values and sync toggle states
+      if (configPills.length > 0) {
+        fetch('/api/config').then(function(r) { return r.json(); }).then(function(d) {
+          if (!d.ok) return;
+          configPills.forEach(function(cp) {
+            var el = document.getElementById(cp.id);
+            if (!el) return;
+            var parts = cp.key.split('.');
+            var val = d.config;
+            for (var i = 0; i < parts.length; i++) { val = val ? val[parts[i]] : undefined; }
+            // Find which index matches current value
+            var idx = 0;
+            for (var j = 0; j < cp.values.length; j++) {
+              if (JSON.stringify(val) === JSON.stringify(cp.values[j])) { idx = j; break; }
+            }
+            el.setAttribute('data-config-idx', idx);
+            el.textContent = cp.labels[idx];
+            el.title = cp.key + ' = ' + JSON.stringify(val);
+            el.className = idx === 0 ? 'nai-cust-pill active' : 'nai-cust-pill dim';
+          });
+        });
+      }
     },
 
     renderConnectors: function() {
@@ -1751,6 +1824,70 @@ const uiServer = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ models: [], error: err.message }));
+    }
+    return;
+  }
+
+  // ── Config API (read/update nullclaw config.json) ────────────────
+  if (req.url === "/api/config" && req.method === "GET") {
+    try {
+      const raw = require("fs").readFileSync(NULLCLAW_CONFIG, "utf-8");
+      const cfg = JSON.parse(raw);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, config: cfg }));
+    } catch (err) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+    return;
+  }
+
+  if (req.url === "/api/config" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; if (body.length > 1024 * 1024) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const { path: keyPath, value } = JSON.parse(body);
+        if (!keyPath || typeof keyPath !== "string") throw new Error("Missing 'path'");
+        const raw = require("fs").readFileSync(NULLCLAW_CONFIG, "utf-8");
+        const cfg = JSON.parse(raw);
+        // Navigate to nested key (e.g. "autonomy.workspace_only")
+        const parts = keyPath.split(".");
+        let obj = cfg;
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (obj[parts[i]] === undefined) obj[parts[i]] = {};
+          obj = obj[parts[i]];
+        }
+        obj[parts[parts.length - 1]] = value;
+        require("fs").writeFileSync(NULLCLAW_CONFIG, JSON.stringify(cfg, null, 2) + "\n");
+        console.log(`[config] Updated ${keyPath} = ${JSON.stringify(value)}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, updated: keyPath, value }));
+      } catch (err) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.url === "/api/gateway/restart" && req.method === "POST") {
+    console.log("[api] Gateway restart requested");
+    try {
+      const { execSync } = require("child_process");
+      // Only kill gateway processes, not agent sessions
+      execSync('powershell -Command "Get-CimInstance Win32_Process -Filter \\\"CommandLine LIKE \'%nullclaw%gateway%\'\\\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"');
+      setTimeout(() => {
+        const { spawn: sp } = require("child_process");
+        const gw = sp(NULLCLAW_EXE, ["gateway"], { detached: true, stdio: "ignore", windowsHide: true });
+        gw.unref();
+        console.log("[api] Gateway restarted");
+      }, 2000);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, message: "Gateway restarting..." }));
+    } catch (err) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
     }
     return;
   }
