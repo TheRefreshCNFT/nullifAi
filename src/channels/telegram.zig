@@ -1672,6 +1672,26 @@ pub const TelegramChannel = struct {
         self.pending_text_received_at.clearRetainingCapacity();
     }
 
+    fn cancelPendingTextChainForKey(self: *TelegramChannel, id: []const u8, sender: []const u8) void {
+        if (self.pending_text_messages.items.len == 0) return;
+        if (self.pending_text_messages.items.len != self.pending_text_received_at.items.len) {
+            self.resetPendingTextBuffers();
+            return;
+        }
+
+        var i: usize = 0;
+        while (i < self.pending_text_messages.items.len) {
+            const pending = self.pending_text_messages.items[i];
+            if (std.mem.eql(u8, pending.id, id) and std.mem.eql(u8, pending.sender, sender)) {
+                const removed = self.pending_text_messages.orderedRemove(i);
+                _ = self.pending_text_received_at.orderedRemove(i);
+                removed.deinit(self.allocator);
+                continue;
+            }
+            i += 1;
+        }
+    }
+
     fn maybeSweepTempMediaFiles(self: *TelegramChannel) void {
         self.polls_since_temp_sweep += 1;
         if (self.polls_since_temp_sweep < TEMP_MEDIA_SWEEP_INTERVAL_POLLS) return;
@@ -2025,6 +2045,9 @@ pub const TelegramChannel = struct {
             var i: usize = 0;
             while (i < messages.items.len) {
                 if (!shouldDebounceTextMessage(self, messages.items[i])) {
+                    // Explicitly cancel stale chain fragments for this sender/chat
+                    // so a fresh message is not blocked by old pending chunks.
+                    self.cancelPendingTextChainForKey(messages.items[i].id, messages.items[i].sender);
                     i += 1;
                     continue;
                 }
@@ -4608,6 +4631,50 @@ test "telegram flushMaturedPendingTextMessages waits for newest chain message" {
 
     try std.testing.expectEqual(@as(usize, 2), out_messages.items.len);
     try std.testing.expectEqual(@as(usize, 0), ch.pending_text_messages.items.len);
+
+    ch.resetPendingTextBuffers();
+    ch.pending_text_messages.deinit(alloc);
+    ch.pending_text_received_at.deinit(alloc);
+}
+
+test "telegram cancelPendingTextChainForKey removes only matching sender/chat chain" {
+    const alloc = std.testing.allocator;
+    var ch = TelegramChannel.init(alloc, "123:ABC", &.{"*"}, &.{}, "allowlist");
+
+    const now = root.nowEpochSecs();
+    try ch.pending_text_messages.append(alloc, .{
+        .id = try alloc.dupe(u8, "user-a"),
+        .sender = try alloc.dupe(u8, "chat-a"),
+        .content = try alloc.dupe(u8, "old-part-a1"),
+        .channel = "telegram",
+        .timestamp = now - 30,
+        .message_id = 1,
+    });
+    try ch.pending_text_received_at.append(alloc, now - 30);
+    try ch.pending_text_messages.append(alloc, .{
+        .id = try alloc.dupe(u8, "user-a"),
+        .sender = try alloc.dupe(u8, "chat-a"),
+        .content = try alloc.dupe(u8, "old-part-a2"),
+        .channel = "telegram",
+        .timestamp = now - 29,
+        .message_id = 2,
+    });
+    try ch.pending_text_received_at.append(alloc, now - 29);
+    try ch.pending_text_messages.append(alloc, .{
+        .id = try alloc.dupe(u8, "user-b"),
+        .sender = try alloc.dupe(u8, "chat-b"),
+        .content = try alloc.dupe(u8, "keep-me"),
+        .channel = "telegram",
+        .timestamp = now - 28,
+        .message_id = 3,
+    });
+    try ch.pending_text_received_at.append(alloc, now - 28);
+
+    ch.cancelPendingTextChainForKey("user-a", "chat-a");
+
+    try std.testing.expectEqual(@as(usize, 1), ch.pending_text_messages.items.len);
+    try std.testing.expectEqualStrings("user-b", ch.pending_text_messages.items[0].id);
+    try std.testing.expectEqualStrings("chat-b", ch.pending_text_messages.items[0].sender);
 
     ch.resetPendingTextBuffers();
     ch.pending_text_messages.deinit(alloc);
