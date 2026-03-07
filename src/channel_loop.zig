@@ -24,6 +24,7 @@ const subagent_runner = @import("subagent_runner.zig");
 const agent_routing = @import("agent_routing.zig");
 const provider_runtime = @import("providers/runtime_bundle.zig");
 const thread_stacks = @import("thread_stacks.zig");
+const control_plane = @import("control_plane.zig");
 
 const signal = @import("channels/signal.zig");
 const matrix = @import("channels/matrix.zig");
@@ -49,26 +50,6 @@ fn setScheduleToolContext(tools: []const tools_mod.Tool, chat_id: []const u8) vo
 
 fn shouldSuppressGroupReply(is_group: bool, reply: []const u8) bool {
     return is_group and std.mem.indexOf(u8, reply, "[NO_REPLY]") != null;
-}
-
-fn isStopLikeCommand(content: []const u8) bool {
-    const trimmed = std.mem.trim(u8, content, " \t\r\n");
-    if (trimmed.len < 5 or trimmed[0] != '/') return false;
-
-    const body = trimmed[1..];
-    var split_idx: usize = 0;
-    while (split_idx < body.len) : (split_idx += 1) {
-        const ch = body[split_idx];
-        if (ch == ':' or ch == ' ' or ch == '\t') break;
-    }
-    if (split_idx == 0) return false;
-
-    const raw_name = body[0..split_idx];
-    const name = if (std.mem.indexOfScalar(u8, raw_name, '@')) |mention_sep|
-        raw_name[0..mention_sep]
-    else
-        raw_name;
-    return std.ascii.eqlIgnoreCase(name, "stop") or std.ascii.eqlIgnoreCase(name, "abort");
 }
 
 fn processTelegramMessage(
@@ -637,7 +618,7 @@ pub fn runTelegramLoop(
             if (enable_parallel) {
                 var handled_in_worker = false;
                 parallel_attempt: {
-                    if (isStopLikeCommand(msg.content) and active_worker_threads.get(session_key) != null) {
+                    if (control_plane.isStopLikeCommand(msg.content) and active_worker_threads.get(session_key) != null) {
                         var interrupt = runtime.session_mgr.requestTurnInterrupt(session_key);
                         defer interrupt.deinit(allocator);
                         var dynamic_notice: ?[]u8 = null;
@@ -1180,21 +1161,21 @@ test "shouldSuppressGroupReply suppresses only group replies with marker" {
 }
 
 test "isStopLikeCommand matches stop and abort variants" {
-    try std.testing.expect(isStopLikeCommand("/stop"));
-    try std.testing.expect(isStopLikeCommand("  /stop  "));
-    try std.testing.expect(isStopLikeCommand("/abort"));
-    try std.testing.expect(isStopLikeCommand("/STOP"));
-    try std.testing.expect(isStopLikeCommand("/abort@nullclaw_bot"));
-    try std.testing.expect(isStopLikeCommand("/stop: now"));
-    try std.testing.expect(isStopLikeCommand("/abort please"));
+    try std.testing.expect(control_plane.isStopLikeCommand("/stop"));
+    try std.testing.expect(control_plane.isStopLikeCommand("  /stop  "));
+    try std.testing.expect(control_plane.isStopLikeCommand("/abort"));
+    try std.testing.expect(control_plane.isStopLikeCommand("/STOP"));
+    try std.testing.expect(control_plane.isStopLikeCommand("/abort@nullclaw_bot"));
+    try std.testing.expect(control_plane.isStopLikeCommand("/stop: now"));
+    try std.testing.expect(control_plane.isStopLikeCommand("/abort please"));
 }
 
 test "isStopLikeCommand rejects non-control commands" {
-    try std.testing.expect(!isStopLikeCommand("stop"));
-    try std.testing.expect(!isStopLikeCommand("/stopping"));
-    try std.testing.expect(!isStopLikeCommand("/aborted"));
-    try std.testing.expect(!isStopLikeCommand("/help"));
-    try std.testing.expect(!isStopLikeCommand(""));
+    try std.testing.expect(!control_plane.isStopLikeCommand("stop"));
+    try std.testing.expect(!control_plane.isStopLikeCommand("/stopping"));
+    try std.testing.expect(!control_plane.isStopLikeCommand("/aborted"));
+    try std.testing.expect(!control_plane.isStopLikeCommand("/help"));
+    try std.testing.expect(!control_plane.isStopLikeCommand(""));
 }
 
 test "ProviderHolder tagged union fields" {
