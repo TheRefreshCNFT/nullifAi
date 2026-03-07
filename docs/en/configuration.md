@@ -2,6 +2,26 @@
 
 NullClaw is compatible with OpenClaw config structure and uses `snake_case` keys.
 
+## Page Guide
+
+**Who this page is for**
+
+- Users creating or editing the main `config.json`
+- Operators tuning channels, gateway behavior, and autonomy limits
+- Migrators mapping existing OpenClaw-style settings into NullClaw
+
+**Read this next**
+
+- Open [Usage and Operations](./usage.md) after config edits to validate runtime behavior
+- Open [Security](./security.md) before widening permissions, public exposure, or tool scope
+- Open [Gateway API](./gateway-api.md) if your config changes affect pairing, webhooks, or external integrations
+
+**If you came from ...**
+
+- [Installation](./installation.md): this page takes over once `nullclaw` is installed and ready for first-run setup
+- [README](./README.md): this is the detailed config path after choosing the operator/user docs route
+- [Gateway API](./gateway-api.md): come back here when the API workflow depends on concrete `gateway` or channel settings
+
 ## Config File Path
 
 - macOS/Linux: `~/.nullclaw/config.json`
@@ -184,3 +204,16 @@ If gateway/channel changed, also run:
 ```bash
 nullclaw gateway
 ```
+
+## Next Steps
+
+- Run `nullclaw doctor` and `nullclaw status` after each edit to confirm the config still loads cleanly
+- Use [Usage and Operations](./usage.md) for operational checks, service mode, and troubleshooting flow
+- Review [Security](./security.md) before enabling broader autonomy, public bind, or wildcard allowlists
+
+## Related Pages
+
+- [Installation](./installation.md)
+- [Usage and Operations](./usage.md)
+- [Security](./security.md)
+- [Gateway API](./gateway-api.md)

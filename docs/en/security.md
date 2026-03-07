@@ -2,6 +2,26 @@
 
 NullClaw follows secure-by-default behavior: local bind by default, pairing auth, sandbox isolation, and least privilege.
 
+## Page Guide
+
+**Who this page is for**
+
+- Operators hardening a local or tunneled NullClaw deployment
+- Reviewers checking whether config or runtime changes widen trust boundaries
+- Contributors touching gateway, tool, sandbox, or exposure-sensitive paths
+
+**Read this next**
+
+- Open [Configuration](./configuration.md) when you need the exact keys behind the controls summarized here
+- Open [Gateway API](./gateway-api.md) if your security review includes pairing, bearer tokens, or webhooks
+- Open [Usage and Operations](./usage.md) for day-to-day checks after a security-related config change
+
+**If you came from ...**
+
+- [Usage and Operations](./usage.md): this page explains the hardening context behind gateway and service recommendations
+- [Configuration](./configuration.md): come here when a config key has security impact and needs policy-level interpretation
+- [Architecture](./architecture.md): return here if a subsystem design decision crosses a security-sensitive boundary
+
 ## Baseline Controls
 
 | Item | Status | How |
@@ -56,3 +76,16 @@ These settings significantly widen trust boundaries and should be used only in c
 - `allowed_commands = ["*"]`
 - `allowed_paths = ["*"]`
 - `gateway.allow_public_bind = true`
+
+## Next Steps
+
+- Review [Configuration](./configuration.md) before applying any high-risk setting listed on this page
+- Use [Gateway API](./gateway-api.md) when you need endpoint-level auth and exposure details
+- Run the checks in [Usage and Operations](./usage.md) after changing gateway, channel, or autonomy settings
+
+## Related Pages
+
+- [Configuration](./configuration.md)
+- [Usage and Operations](./usage.md)
+- [Gateway API](./gateway-api.md)
+- [Architecture](./architecture.md)

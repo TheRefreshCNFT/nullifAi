@@ -2,6 +2,26 @@
 
 This page focuses on day-to-day commands, service mode, and troubleshooting.
 
+## Page Guide
+
+**Who this page is for**
+
+- Users running NullClaw day to day from the CLI or service mode
+- Operators checking health, restarts, and post-change validation steps
+- Troubleshooters narrowing down common startup, model, channel, or gateway issues
+
+**Read this next**
+
+- Open [Commands](./commands.md) if you need a fuller CLI reference beyond the common paths here
+- Open [Security](./security.md) before exposing the gateway or widening allowlists and autonomy
+- Open [Gateway API](./gateway-api.md) if your operational flow depends on pairing or webhook calls
+
+**If you came from ...**
+
+- [Installation](./installation.md): this page picks up after the binary is installed and ready for first-run checks
+- [Configuration](./configuration.md): come here to validate config changes with runtime commands and troubleshooting steps
+- [Commands](./commands.md): return here when you want the operational sequence, not just the raw command list
+
 ## First-Run Flow
 
 1. Initialize:
@@ -136,3 +156,16 @@ For gateway scenarios:
 nullclaw gateway
 curl http://127.0.0.1:3000/health
 ```
+
+## Next Steps
+
+- Open [Commands](./commands.md) for less common CLI flows and a broader command catalog
+- Review [Security](./security.md) before moving from local-only operation to wider exposure
+- Use [Gateway API](./gateway-api.md) when your operational checks include pairing or webhook integrations
+
+## Related Pages
+
+- [Installation](./installation.md)
+- [Configuration](./configuration.md)
+- [Commands](./commands.md)
+- [Security](./security.md)

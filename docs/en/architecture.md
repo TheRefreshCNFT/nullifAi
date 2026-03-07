@@ -2,6 +2,26 @@
 
 NullClaw uses a vtable-driven pluggable architecture. Most capabilities are extended by implementing interfaces and registering factories.
 
+## Page Guide
+
+**Who this page is for**
+
+- Contributors learning the main subsystem boundaries before editing code
+- Reviewers checking whether a change follows the vtable and factory extension model
+- Integrators deciding where a new provider, channel, tool, memory backend, or runtime fits
+
+**Read this next**
+
+- Open [Development](./development.md) before making repo changes or running contributor validation flows
+- Open [Security](./security.md) if your design touches gateway, sandbox, tools, or exposure boundaries
+- Open [README](./README.md) if you need the broader English docs map around this contributor-focused view
+
+**If you came from ...**
+
+- [Development](./development.md): this page gives the subsystem map behind the contributor workflow
+- [README](./README.md): this is the deeper design path once you know you need implementation-level context
+- `AGENTS.md`: use this page to connect repo guardrails with the concrete module layout and extension seams
+
 ## Core Design
 
 - Subsystems are abstracted via interfaces using `ptr: *anyopaque + vtable`.
@@ -38,3 +58,16 @@ NullClaw uses a vtable-driven pluggable architecture. Most capabilities are exte
 1. Prefer extension through implementations, not invasive core rewrites.
 2. Keep subsystem boundaries strict (avoid cross-subsystem internals coupling).
 3. For high-risk paths (`security/runtime/gateway/tools`), include boundary/failure-path validation.
+
+## Next Steps
+
+- Read [Development](./development.md) for contributor workflow, validation expectations, and PR prep
+- Review [Security](./security.md) before changing any high-risk subsystem named on this page
+- Return to [README](./README.md) if you want the broader docs map after this design overview
+
+## Related Pages
+
+- [README](./README.md)
+- [Development](./development.md)
+- [Security](./security.md)
+- [Commands](./commands.md)
