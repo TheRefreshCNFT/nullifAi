@@ -3,6 +3,7 @@ const root = @import("root.zig");
 const Provider = root.Provider;
 const anthropic = @import("anthropic.zig");
 const openai = @import("openai.zig");
+const azure_openai = @import("azure_openai.zig");
 const ollama = @import("ollama.zig");
 const gemini = @import("gemini.zig");
 const vertex = @import("vertex.zig");
@@ -15,6 +16,7 @@ const openai_codex = @import("openai_codex.zig");
 pub const ProviderKind = enum {
     anthropic_provider,
     openai_provider,
+    azure_openai_provider,
     openrouter_provider,
     ollama_provider,
     gemini_provider,
@@ -188,6 +190,9 @@ fn findCompatProvider(name: []const u8) ?CompatProvider {
 const core_providers = std.StaticStringMap(ProviderKind).initComptime(.{
     .{ "anthropic", .anthropic_provider },
     .{ "openai", .openai_provider },
+    .{ "azure", .azure_openai_provider },
+    .{ "azure-openai", .azure_openai_provider },
+    .{ "azure_openai", .azure_openai_provider },
     .{ "openrouter", .openrouter_provider },
     .{ "ollama", .ollama_provider },
     .{ "gemini", .gemini_provider },
@@ -251,6 +256,7 @@ pub const ProviderHolder = union(enum) {
     openrouter: openrouter.OpenRouterProvider,
     anthropic: anthropic.AnthropicProvider,
     openai: openai.OpenAiProvider,
+    azure_openai: azure_openai.AzureOpenAiProvider,
     gemini: gemini.GeminiProvider,
     vertex: vertex.VertexProvider,
     ollama: ollama.OllamaProvider,
@@ -265,6 +271,7 @@ pub const ProviderHolder = union(enum) {
             .openrouter => |*p| p.provider(),
             .anthropic => |*p| p.provider(),
             .openai => |*p| p.provider(),
+            .azure_openai => |*p| p.provider(),
             .gemini => |*p| p.provider(),
             .vertex => |*p| p.provider(),
             .ollama => |*p| p.provider(),
@@ -301,6 +308,12 @@ pub const ProviderHolder = union(enum) {
                     base_url,
             ) },
             .openai_provider => .{ .openai = openai.OpenAiProvider.init(allocator, api_key, user_agent) },
+            .azure_openai_provider => .{ .azure_openai = azure_openai.AzureOpenAiProvider.init(
+                allocator,
+                api_key,
+                base_url orelse "https://example.openai.azure.com",
+                user_agent,
+            ) },
             .gemini_provider => .{ .gemini = gemini.GeminiProvider.init(allocator, api_key) },
             .vertex_provider => .{ .vertex = vertex.VertexProvider.init(allocator, api_key, base_url) },
             .ollama_provider => .{ .ollama = ollama.OllamaProvider.init(allocator, base_url) },
@@ -374,6 +387,9 @@ pub const ProviderHolder = union(enum) {
 test "classifyProvider identifies known providers" {
     try std.testing.expect(classifyProvider("anthropic") == .anthropic_provider);
     try std.testing.expect(classifyProvider("openai") == .openai_provider);
+    try std.testing.expect(classifyProvider("azure") == .azure_openai_provider);
+    try std.testing.expect(classifyProvider("azure-openai") == .azure_openai_provider);
+    try std.testing.expect(classifyProvider("azure_openai") == .azure_openai_provider);
     try std.testing.expect(classifyProvider("openrouter") == .openrouter_provider);
     try std.testing.expect(classifyProvider("ollama") == .ollama_provider);
     try std.testing.expect(classifyProvider("gemini") == .gemini_provider);
@@ -675,6 +691,10 @@ test "ProviderHolder.fromConfig routes to correct variant" {
     var h2 = ProviderHolder.fromConfig(alloc, "openai", "sk-test", null, true, null);
     defer h2.deinit();
     try std.testing.expect(h2 == .openai);
+    // azure openai
+    var h2a = ProviderHolder.fromConfig(alloc, "azure", "test-key", "https://test.openai.azure.com", true, null);
+    defer h2a.deinit();
+    try std.testing.expect(h2a == .azure_openai);
     // gemini
     var h3 = ProviderHolder.fromConfig(alloc, "gemini", "key", null, true, null);
     defer h3.deinit();

@@ -5,6 +5,7 @@ const http_util = @import("../http_util.zig");
 // Re-export all provider sub-modules
 pub const anthropic = @import("anthropic.zig");
 pub const openai = @import("openai.zig");
+pub const azure_openai = @import("azure_openai.zig");
 pub const ollama = @import("ollama.zig");
 pub const gemini = @import("gemini.zig");
 pub const vertex = @import("vertex.zig");
