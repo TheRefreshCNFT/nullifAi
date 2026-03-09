@@ -15,6 +15,9 @@ const pathStartsWith = path_prefix.pathStartsWith;
 
 /// Maximum characters to include from a single workspace identity file.
 const BOOTSTRAP_MAX_CHARS: usize = 20_000;
+/// Read one extra byte via providers so prompt rendering can distinguish
+/// "exactly at cap" from "truncated beyond cap" without loading full files.
+const BOOTSTRAP_PROVIDER_EXCERPT_BYTES: usize = BOOTSTRAP_MAX_CHARS + 1;
 /// Maximum total characters from injected bootstrap identity files.
 const BOOTSTRAP_TOTAL_MAX_CHARS: usize = 24_000;
 /// Maximum bytes allowed for guarded workspace bootstrap file reads.
@@ -613,7 +616,7 @@ fn injectWorkspaceFile(
 ) !void {
     // Try bootstrap provider first when available.
     if (bootstrap_provider) |bp| {
-        const content = bp.load(allocator, filename) catch null;
+        const content = bp.load_excerpt(allocator, filename, BOOTSTRAP_PROVIDER_EXCERPT_BYTES) catch null;
         if (content) |c| {
             defer allocator.free(c);
             try appendPromptSectionContent(
@@ -728,7 +731,7 @@ fn injectPreferredMemoryFile(
     if (bootstrap_provider) |bp| {
         const memory_files = [_][]const u8{ "MEMORY.md", "memory.md" };
         for (memory_files) |filename| {
-            const content = bp.load(allocator, filename) catch null;
+            const content = bp.load_excerpt(allocator, filename, BOOTSTRAP_PROVIDER_EXCERPT_BYTES) catch null;
             if (content) |c| {
                 defer allocator.free(c);
                 try appendPromptSectionContent(
