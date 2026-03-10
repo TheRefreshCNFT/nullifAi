@@ -176,6 +176,7 @@ fn appendOllamaImageValue(
 pub const OllamaProvider = struct {
     base_url: []const u8,
     allocator: std.mem.Allocator,
+    native_tools: bool,
 
     const DEFAULT_BASE_URL = "http://localhost:11434";
 
@@ -184,6 +185,7 @@ pub const OllamaProvider = struct {
         return .{
             .base_url = url,
             .allocator = allocator,
+            .native_tools = true,
         };
     }
 
@@ -315,8 +317,9 @@ pub const OllamaProvider = struct {
         return ChatResponse{ .content = text };
     }
 
-    fn supportsNativeToolsImpl(_: *anyopaque) bool {
-        return true;
+    fn supportsNativeToolsImpl(ptr: *anyopaque) bool {
+        const self: *OllamaProvider = @ptrCast(@alignCast(ptr));
+        return self.native_tools;
     }
 
     fn supportsVisionImpl(_: *anyopaque) bool {
