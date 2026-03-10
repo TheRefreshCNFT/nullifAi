@@ -20,6 +20,7 @@ const memory_mod = @import("memory/root.zig");
 const Memory = memory_mod.Memory;
 const observability = @import("observability.zig");
 const Observer = observability.Observer;
+const control_plane = @import("control_plane.zig");
 const tools_mod = @import("tools/root.zig");
 const Tool = tools_mod.Tool;
 const SecurityPolicy = @import("security/policy.zig").SecurityPolicy;
@@ -51,6 +52,21 @@ fn persistedAssistantReply(agent: *const Agent, response: []const u8) []const u8
     const last = agent.history.items[agent.history.items.len - 1];
     if (last.role != .assistant) return response;
     return last.content;
+}
+
+fn clearsPersistedSession(message: []const u8) bool {
+    const cmd = control_plane.parseSlashCommand(message) orelse return false;
+    return control_plane.isSlashName(cmd, "new") or
+        control_plane.isSlashName(cmd, "reset") or
+        control_plane.isSlashName(cmd, "restart");
+}
+
+fn persistedUserMessage(message: []const u8) ?[]const u8 {
+    if (agent_mod.commands.bareSessionResetPrompt(message)) |fresh_prompt| {
+        return fresh_prompt;
+    }
+    if (control_plane.parseSlashCommand(message) != null) return null;
+    return message;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -201,27 +217,6 @@ pub const SessionManager = struct {
 
         try self.sessions.put(self.allocator, owned_key, session);
         return session;
-    }
-
-    fn slashCommandName(message: []const u8) ?[]const u8 {
-        const trimmed = std.mem.trim(u8, message, " \t\r\n");
-        if (trimmed.len <= 1 or trimmed[0] != '/') return null;
-
-        const body = trimmed[1..];
-        var split_idx: usize = 0;
-        while (split_idx < body.len) : (split_idx += 1) {
-            const ch = body[split_idx];
-            if (ch == ':' or ch == ' ' or ch == '\t') break;
-        }
-        if (split_idx == 0) return null;
-        return body[0..split_idx];
-    }
-
-    fn slashClearsSession(message: []const u8) bool {
-        const cmd = slashCommandName(message) orelse return false;
-        return std.ascii.eqlIgnoreCase(cmd, "new") or
-            std.ascii.eqlIgnoreCase(cmd, "reset") or
-            std.ascii.eqlIgnoreCase(cmd, "restart");
     }
 
     const StreamAdapterCtx = struct {
@@ -448,14 +443,18 @@ pub const SessionManager = struct {
 
         // Persist messages via session store
         if (self.session_store) |store| {
-            const trimmed = std.mem.trim(u8, content, " \t\r\n");
-            if (slashClearsSession(trimmed)) {
+            if (clearsPersistedSession(content)) {
                 // Clear persisted messages on session reset
                 store.clearMessages(session_key) catch {};
                 // Clear stale auto-saved memories
                 store.clearAutoSaved(session_key) catch {};
-            } else if (!std.mem.startsWith(u8, trimmed, "/")) {
-                // Persist user + assistant history (skip slash commands).
+            }
+
+            if (persistedUserMessage(content)) |persisted_user| {
+                // Persist canonical conversation history.
+                // Slash-only commands are skipped, but bare /new and /reset
+                // become a fresh-session prompt + assistant reply turn and
+                // must be preserved across reloads.
                 // When the turn ends with an assistant history message, prefer
                 // that canonical text over the rendered reply so restored
                 // sessions do not replay /usage footers or reasoning blocks.
@@ -464,7 +463,7 @@ pub const SessionManager = struct {
                 // must persist the actual response instead of stale tool-step
                 // assistant text from earlier in the turn.
                 const persisted_assistant = persistedAssistantReply(&session.agent, response);
-                store.saveMessage(session_key, "user", content) catch {};
+                store.saveMessage(session_key, "user", persisted_user) catch {};
                 store.saveMessage(session_key, "assistant", persisted_assistant) catch {};
                 store.saveUsage(session_key, session.agent.total_tokens) catch {};
             }
@@ -1534,7 +1533,7 @@ test "restored session token reconstruction stays aligned across response cache 
     try testing.expectEqual(@as(u64, expected_tokens), restored_session.agent.total_tokens);
 }
 
-test "processMessage /new resets token usage before later persistence and reload" {
+fn expectResetTurnPersistsFreshSession(command: []const u8) !void {
     var mock = MockProvider{ .response = "ok" };
     const cfg = testConfig();
 
@@ -1555,6 +1554,7 @@ test "processMessage /new resets token usage before later persistence and reload
     defer sm.deinit();
 
     const session_key = "telegram:main:chat-reset-usage";
+    const store = sqlite_mem.sessionStore();
 
     const first = try sm.processMessage(session_key, "before reset", .{
         .channel = "telegram",
@@ -1567,7 +1567,7 @@ test "processMessage /new resets token usage before later persistence and reload
     const session = try sm.getOrCreate(session_key);
     try testing.expectEqual(token_cost, session.agent.total_tokens);
 
-    const reset_reply = try sm.processMessage(session_key, "/new", .{
+    const reset_reply = try sm.processMessage(session_key, command, .{
         .channel = "telegram",
         .is_group = false,
         .group_id = null,
@@ -1575,19 +1575,31 @@ test "processMessage /new resets token usage before later persistence and reload
     defer testing.allocator.free(reset_reply);
     try testing.expectEqual(token_cost, session.agent.total_tokens);
 
-    const after_reset = try sm.processMessage(session_key, "after reset", .{
-        .channel = "telegram",
-        .is_group = false,
-        .group_id = null,
-    });
-    defer testing.allocator.free(after_reset);
-    try testing.expectEqual(token_cost * 2, session.agent.total_tokens);
+    const entries = try store.loadMessages(testing.allocator, session_key);
+    defer memory_mod.freeMessages(testing.allocator, entries);
+    try testing.expectEqual(@as(usize, 2), entries.len);
+    try testing.expectEqualStrings("user", entries[0].role);
+    try testing.expectEqualStrings(agent_mod.commands.bareSessionResetPrompt(command).?, entries[0].content);
+    try testing.expectEqualStrings("assistant", entries[1].role);
+    try testing.expectEqualStrings("ok", entries[1].content);
+    try testing.expectEqual(@as(?u64, token_cost), try store.loadUsage(session_key));
 
     session.last_active = 0;
     try testing.expectEqual(@as(usize, 1), sm.evictIdle(1));
 
     const restored = try sm.getOrCreate(session_key);
-    try testing.expectEqual(token_cost * 2, restored.agent.total_tokens);
+    try testing.expectEqual(token_cost, restored.agent.total_tokens);
+    try testing.expectEqual(@as(usize, 2), restored.agent.historyLen());
+    try testing.expectEqualStrings(entries[0].content, restored.agent.history.items[0].content);
+    try testing.expectEqualStrings("ok", restored.agent.history.items[1].content);
+}
+
+test "processMessage bare /new persists fresh-session turn across reload" {
+    try expectResetTurnPersistsFreshSession("/new");
+}
+
+test "processMessage bare /reset with mention persists fresh-session turn across reload" {
+    try expectResetTurnPersistsFreshSession("/reset@nullclaw_bot:");
 }
 
 test "processMessage different keys — independent sessions" {
