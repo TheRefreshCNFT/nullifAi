@@ -130,7 +130,9 @@ test "isStopLikeCommand rejects non-control commands" {
     try std.testing.expect(!isStopLikeCommand(""));
 }
 
-test "telegram bot command payload includes memory and doctor commands" {
+test "telegram bot command payload includes registered menu commands" {
+    try std.testing.expect(std.mem.indexOf(u8, TELEGRAM_BOT_COMMANDS_JSON, "\"command\":\"allowlist\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, TELEGRAM_BOT_COMMANDS_JSON, "\"command\":\"skill\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, TELEGRAM_BOT_COMMANDS_JSON, "\"command\":\"memory\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, TELEGRAM_BOT_COMMANDS_JSON, "\"command\":\"doctor\"") != null);
 }
