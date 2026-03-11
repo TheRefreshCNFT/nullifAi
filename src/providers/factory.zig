@@ -353,7 +353,11 @@ pub const ProviderHolder = union(enum) {
             },
             .gemini_provider => .{ .gemini = gemini.GeminiProvider.init(allocator, api_key) },
             .vertex_provider => .{ .vertex = vertex.VertexProvider.init(allocator, api_key, base_url) },
-            .ollama_provider => .{ .ollama = ollama.OllamaProvider.init(allocator, base_url) },
+            .ollama_provider => blk: {
+                var prov = ollama.OllamaProvider.init(allocator, base_url);
+                prov.native_tools = native_tools;
+                break :blk .{ .ollama = prov };
+            },
             .openrouter_provider => .{ .openrouter = openrouter.OpenRouterProvider.init(allocator, api_key) },
             .compatible_provider => blk: {
                 // Config base_url overrides built-in URL table and custom: prefix
@@ -675,6 +679,14 @@ test "fromConfig inherits native_tools=false from table" {
     defer h.deinit();
     try std.testing.expect(h == .compatible);
     try std.testing.expect(!h.compatible.native_tools);
+}
+
+test "fromConfig applies native_tools override for ollama" {
+    const alloc = std.testing.allocator;
+    var h = ProviderHolder.fromConfig(alloc, "ollama", null, null, false, null);
+    defer h.deinit();
+    try std.testing.expect(h == .ollama);
+    try std.testing.expect(!h.provider().supportsNativeTools());
 }
 
 test "fromConfig applies max_tokens_non_streaming from table" {

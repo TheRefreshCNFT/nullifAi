@@ -91,7 +91,7 @@ Localized documentation lives under `docs/en/` and `docs/zh/`. Use the links bel
 | Goal | Open this first | Then go to |
 |---|---|---|
 | First run in English | [`docs/en/README.md`](docs/en/README.md) | [`docs/en/installation.md`](docs/en/installation.md) → [`docs/en/configuration.md`](docs/en/configuration.md) → [`docs/en/usage.md`](docs/en/usage.md) |
-| 中文快速上手 | [`docs/zh/README.md`](docs/zh/README.md) | [`docs/zh/installation.md`](docs/zh/installation.md) → [`docs/zh/configuration.md`](docs/zh/configuration.md) → [`docs/zh/usage.md`](docs/zh/usage.md) |
+| Chinese Quick Start (中文快速上手) | [`docs/zh/README.md`](docs/zh/README.md) | [`docs/zh/installation.md`](docs/zh/installation.md) → [`docs/zh/configuration.md`](docs/zh/configuration.md) → [`docs/zh/usage.md`](docs/zh/usage.md) |
 | Find the right CLI command | [`docs/en/commands.md`](docs/en/commands.md) / [`docs/zh/commands.md`](docs/zh/commands.md) | `nullclaw help` → task-specific subcommand page |
 | Contribute code or docs | [`CONTRIBUTING.md`](CONTRIBUTING.md) | [`docs/en/development.md`](docs/en/development.md) / [`docs/zh/development.md`](docs/zh/development.md) → relevant architecture page |
 | Operate or secure a deployment | [`docs/en/usage.md`](docs/en/usage.md) / [`docs/zh/usage.md`](docs/zh/usage.md) | [`docs/en/security.md`](docs/en/security.md) / [`docs/zh/security.md`](docs/zh/security.md) → Gateway API |

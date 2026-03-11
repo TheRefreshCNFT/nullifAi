@@ -798,7 +798,8 @@ pub const Config = struct {
         try w.print("    \"shell_timeout_secs\": {d},\n", .{self.tools.shell_timeout_secs});
         try w.print("    \"shell_max_output_bytes\": {d},\n", .{self.tools.shell_max_output_bytes});
         try w.print("    \"max_file_size_bytes\": {d},\n", .{self.tools.max_file_size_bytes});
-        try w.print("    \"web_fetch_max_chars\": {d}", .{self.tools.web_fetch_max_chars});
+        try w.print("    \"web_fetch_max_chars\": {d},\n", .{self.tools.web_fetch_max_chars});
+        try w.print("    \"path_env_vars\": {f}", .{std.json.fmt(self.tools.path_env_vars, .{})});
         // tools.media.audio
         {
             const am = self.audio_media;
@@ -1007,7 +1008,10 @@ pub const Config = struct {
         if (self.model_routes.len > 0) {
             std.debug.print("  Routes:   {d} configured\n", .{self.model_routes.len});
             for (self.model_routes) |r| {
-                std.debug.print("            [{s}] {s}/{s}\n", .{ r.hint, r.provider, r.model });
+                std.debug.print(
+                    "            [{s}] {s}/{s} (cost={s}, quota={s})\n",
+                    .{ r.hint, r.provider, r.model, @tagName(r.cost_class), @tagName(r.quota_class) },
+                );
             }
         }
         if (self.agents.len > 0) {
@@ -1533,6 +1537,8 @@ test "save roundtrip preserves extended config sections" {
             .provider = "groq",
             .model = "llama-3.3-70b",
             .api_key = "gsk_test",
+            .cost_class = .cheap,
+            .quota_class = .unlimited,
         },
     };
     cfg.agents = &.{
@@ -2522,6 +2528,56 @@ test "json parse autonomy allowed_paths" {
     allocator.free(cfg.autonomy.allowed_paths);
 }
 
+test "json parse tools.path_env_vars" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"tools": {"path_env_vars": ["LD_LIBRARY_PATH", "PYTHONHOME"]}}
+    ;
+    var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
+    try cfg.parseJson(json);
+    try std.testing.expectEqual(@as(usize, 2), cfg.tools.path_env_vars.len);
+    try std.testing.expectEqualStrings("LD_LIBRARY_PATH", cfg.tools.path_env_vars[0]);
+    try std.testing.expectEqualStrings("PYTHONHOME", cfg.tools.path_env_vars[1]);
+    for (cfg.tools.path_env_vars) |p| allocator.free(p);
+    allocator.free(cfg.tools.path_env_vars);
+}
+
+test "save roundtrip preserves tools.path_env_vars" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const base = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{base});
+    defer allocator.free(config_path);
+
+    var cfg = Config{
+        .workspace_dir = base,
+        .config_path = config_path,
+        .allocator = allocator,
+    };
+    cfg.tools.path_env_vars = &.{ "LD_LIBRARY_PATH", "PYTHONHOME" };
+    try cfg.save();
+
+    const file = try std.fs.openFileAbsolute(config_path, .{});
+    defer file.close();
+    const content = try file.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(content);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var loaded = Config{
+        .workspace_dir = base,
+        .config_path = config_path,
+        .allocator = arena.allocator(),
+    };
+    try loaded.parseJson(content);
+    try std.testing.expectEqual(@as(usize, 2), loaded.tools.path_env_vars.len);
+    try std.testing.expectEqualStrings("LD_LIBRARY_PATH", loaded.tools.path_env_vars[0]);
+    try std.testing.expectEqualStrings("PYTHONHOME", loaded.tools.path_env_vars[1]);
+}
+
 test "json parse autonomy allow_raw_url_chars" {
     const allocator = std.testing.allocator;
     const json =
@@ -2606,8 +2662,8 @@ test "json parse model routes" {
     const allocator = std.testing.allocator;
     const json =
         \\{"model_routes": [
-        \\  {"hint": "reasoning", "provider": "openrouter", "model": "anthropic/claude-opus-4"},
-        \\  {"hint": "fast", "provider": "groq", "model": "llama-3.3-70b", "api_key": "gsk_test"}
+        \\  {"hint": "reasoning", "provider": "openrouter", "model": "anthropic/claude-opus-4", "cost_class": "premium", "quota_class": "constrained"},
+        \\  {"hint": "fast", "provider": "groq", "model": "llama-3.3-70b", "api_key": "gsk_test", "cost_class": "free", "quota_class": "unlimited"}
         \\]}
     ;
     var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
@@ -2617,10 +2673,14 @@ test "json parse model routes" {
     try std.testing.expectEqualStrings("openrouter", cfg.model_routes[0].provider);
     try std.testing.expectEqualStrings("anthropic/claude-opus-4", cfg.model_routes[0].model);
     try std.testing.expect(cfg.model_routes[0].api_key == null);
+    try std.testing.expectEqual(config_types.ModelRouteCostClass.premium, cfg.model_routes[0].cost_class);
+    try std.testing.expectEqual(config_types.ModelRouteQuotaClass.constrained, cfg.model_routes[0].quota_class);
     try std.testing.expectEqualStrings("fast", cfg.model_routes[1].hint);
     try std.testing.expectEqualStrings("groq", cfg.model_routes[1].provider);
     try std.testing.expectEqualStrings("llama-3.3-70b", cfg.model_routes[1].model);
     try std.testing.expectEqualStrings("gsk_test", cfg.model_routes[1].api_key.?);
+    try std.testing.expectEqual(config_types.ModelRouteCostClass.free, cfg.model_routes[1].cost_class);
+    try std.testing.expectEqual(config_types.ModelRouteQuotaClass.unlimited, cfg.model_routes[1].quota_class);
     // Cleanup
     for (cfg.model_routes) |r| {
         allocator.free(r.hint);
@@ -2648,6 +2708,50 @@ test "json parse model routes skips invalid entries" {
     allocator.free(cfg.model_routes[0].provider);
     allocator.free(cfg.model_routes[0].model);
     allocator.free(cfg.model_routes);
+}
+
+test "json parse model route metadata falls back to defaults on unknown values" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"model_routes": [
+        \\  {"hint": "fast", "provider": "groq", "model": "llama-3.3-70b", "cost_class": "mystery", "quota_class": "burst"}
+        \\]}
+    ;
+    var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
+    try cfg.parseJson(json);
+    try std.testing.expectEqual(@as(usize, 1), cfg.model_routes.len);
+    try std.testing.expectEqual(config_types.ModelRouteCostClass.standard, cfg.model_routes[0].cost_class);
+    try std.testing.expectEqual(config_types.ModelRouteQuotaClass.normal, cfg.model_routes[0].quota_class);
+    allocator.free(cfg.model_routes[0].hint);
+    allocator.free(cfg.model_routes[0].provider);
+    allocator.free(cfg.model_routes[0].model);
+    allocator.free(cfg.model_routes);
+}
+
+fn parseModelRoutesForAllocationTest(allocator: std.mem.Allocator, json: []const u8) !void {
+    var cfg = Config{
+        .workspace_dir = "/tmp/yc",
+        .config_path = "/tmp/yc/config.json",
+        .allocator = allocator,
+    };
+    try cfg.parseJson(json);
+    for (cfg.model_routes) |route| {
+        allocator.free(route.hint);
+        allocator.free(route.provider);
+        allocator.free(route.model);
+        if (route.api_key) |api_key| allocator.free(api_key);
+    }
+    allocator.free(cfg.model_routes);
+}
+
+test "json parse model routes frees partial allocations on out-of-memory" {
+    const json =
+        \\{"model_routes": [
+        \\  {"hint": "reasoning", "provider": "openrouter", "model": "anthropic/claude-opus-4", "cost_class": "premium", "quota_class": "constrained"},
+        \\  {"hint": "fast", "provider": "groq", "model": "llama-3.3-70b", "api_key": "gsk_test", "cost_class": "free", "quota_class": "unlimited"}
+        \\]}
+    ;
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, parseModelRoutesForAllocationTest, .{json});
 }
 
 test "json parse agents" {
@@ -2709,7 +2813,7 @@ test "json parse all new fields together" {
     const allocator = std.testing.allocator;
     const json =
         \\{
-        \\  "model_routes": [{"hint": "fast", "provider": "groq", "model": "llama-3.3-70b"}],
+        \\  "model_routes": [{"hint": "fast", "provider": "groq", "model": "llama-3.3-70b", "cost_class": "cheap", "quota_class": "normal"}],
         \\  "agents": {"list": [{"name": "helper", "provider": "anthropic", "model": "claude-haiku-3.5"}]},
         \\  "autonomy": {"allowed_commands": ["ls"]},
         \\  "gateway": {"paired_tokens": ["tok-1"]},
@@ -2719,6 +2823,8 @@ test "json parse all new fields together" {
     var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
     try cfg.parseJson(json);
     try std.testing.expectEqual(@as(usize, 1), cfg.model_routes.len);
+    try std.testing.expectEqual(config_types.ModelRouteCostClass.cheap, cfg.model_routes[0].cost_class);
+    try std.testing.expectEqual(config_types.ModelRouteQuotaClass.normal, cfg.model_routes[0].quota_class);
     try std.testing.expectEqual(@as(usize, 1), cfg.agents.len);
     try std.testing.expectEqual(@as(usize, 1), cfg.autonomy.allowed_commands.len);
     try std.testing.expectEqual(@as(usize, 1), cfg.gateway.paired_tokens.len);
@@ -2872,6 +2978,85 @@ test "parse agents.list with id field" {
     try cfg.parseJson(json);
     try std.testing.expectEqual(@as(usize, 1), cfg.agents.len);
     try std.testing.expectEqualStrings("researcher", cfg.agents[0].name);
+    allocator.free(cfg.agents[0].name);
+    allocator.free(cfg.agents[0].provider);
+    allocator.free(cfg.agents[0].model);
+    allocator.free(cfg.agents);
+}
+
+test "parse agents.list primary model ref without provider field" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"agents": {"list": [{"id": "coder", "model": {"primary": "ollama/qwen3.5:cloud"}}]}}
+    ;
+    var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
+    try cfg.parseJson(json);
+    try std.testing.expectEqual(@as(usize, 1), cfg.agents.len);
+    try std.testing.expectEqualStrings("coder", cfg.agents[0].name);
+    try std.testing.expectEqualStrings("ollama", cfg.agents[0].provider);
+    try std.testing.expectEqualStrings("qwen3.5:cloud", cfg.agents[0].model);
+    allocator.free(cfg.agents[0].name);
+    allocator.free(cfg.agents[0].provider);
+    allocator.free(cfg.agents[0].model);
+    allocator.free(cfg.agents);
+}
+
+test "parse agents object-of-objects shape" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{
+        \\  "agents": {
+        \\    "defaults": {"model": {"primary": "anthropic/claude-opus-4"}},
+        \\    "coder": {"provider": "openrouter", "model": "openai/gpt-4.1-mini", "temperature": 0.2},
+        \\    "researcher": {"provider": "anthropic", "model": {"primary": "claude-sonnet-4"}, "max_depth": 5}
+        \\  }
+        \\}
+    ;
+    var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
+    try cfg.parseJson(json);
+    try std.testing.expectEqualStrings("anthropic", cfg.default_provider);
+    try std.testing.expectEqualStrings("claude-opus-4", cfg.default_model.?);
+    try std.testing.expectEqual(@as(usize, 2), cfg.agents.len);
+    try std.testing.expectEqualStrings("coder", cfg.agents[0].name);
+    try std.testing.expectEqualStrings("openrouter", cfg.agents[0].provider);
+    try std.testing.expectEqualStrings("openai/gpt-4.1-mini", cfg.agents[0].model);
+    try std.testing.expectEqual(@as(f64, 0.2), cfg.agents[0].temperature.?);
+    try std.testing.expectEqualStrings("researcher", cfg.agents[1].name);
+    try std.testing.expectEqualStrings("anthropic", cfg.agents[1].provider);
+    try std.testing.expectEqualStrings("claude-sonnet-4", cfg.agents[1].model);
+    try std.testing.expectEqual(@as(u32, 5), cfg.agents[1].max_depth);
+    allocator.free(cfg.default_provider);
+    allocator.free(cfg.default_model.?);
+    for (cfg.agents) |a| {
+        allocator.free(a.name);
+        allocator.free(a.provider);
+        allocator.free(a.model);
+        if (a.system_prompt) |sp| allocator.free(sp);
+        if (a.api_key) |k| allocator.free(k);
+    }
+    allocator.free(cfg.agents);
+}
+
+test "parse agents object-of-objects primary model ref without provider" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{
+        \\  "agents": {
+        \\    "defaults": {"model": {"primary": "anthropic/claude-opus-4"}},
+        \\    "coder": {"model": {"primary": "ollama/qwen3.5:cloud"}}
+        \\  }
+        \\}
+    ;
+    var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
+    try cfg.parseJson(json);
+    try std.testing.expectEqualStrings("anthropic", cfg.default_provider);
+    try std.testing.expectEqualStrings("claude-opus-4", cfg.default_model.?);
+    try std.testing.expectEqual(@as(usize, 1), cfg.agents.len);
+    try std.testing.expectEqualStrings("coder", cfg.agents[0].name);
+    try std.testing.expectEqualStrings("ollama", cfg.agents[0].provider);
+    try std.testing.expectEqualStrings("qwen3.5:cloud", cfg.agents[0].model);
+    allocator.free(cfg.default_provider);
+    allocator.free(cfg.default_model.?);
     allocator.free(cfg.agents[0].name);
     allocator.free(cfg.agents[0].provider);
     allocator.free(cfg.agents[0].model);
