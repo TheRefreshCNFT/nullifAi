@@ -485,6 +485,10 @@ fn writeToolInstructionsSection(w: anytype, tools: anytype) !void {
     try w.writeAll("1. ONLY use the format above. NEVER use <invoke>, <function>, or other XML-like formats.\n");
     try w.writeAll("2. Output actual tags -- never describe steps or give examples.\n");
     try w.writeAll("3. The internal content MUST be valid JSON. No trailing commas, no unquoted keys.\n\n");
+    try w.writeAll("CODING GUIDANCE:\n");
+    try w.writeAll("- When reading or editing source code, PREFER the Hashline tool suite (`file_read_hashed` and `file_edit_hashed`).\n");
+    try w.writeAll("- Use `file_read_hashed` to obtain stable line tags (L<num>:<hash>) and `file_edit_hashed` to apply changes using those tags.\n");
+    try w.writeAll("- This protocol ensures deterministic verification and prevents errors from indentation or stale file state.\n\n");
     try w.writeAll("You may use multiple tool calls in a single response. ");
     try w.writeAll("After tool execution, results appear in <tool_result> tags. ");
     try w.writeAll("Continue reasoning with the results until you can give a final answer.\n\n");
@@ -532,11 +536,11 @@ fn appendSkillsSection(
     w: anytype,
     workspace_dir: []const u8,
 ) !void {
-    // Two-source loading: workspace skills + ~/.nullclaw/skills/community/
+    // Two-source loading: workspace skills + ~/.nullclaw/skills/
     const home_dir = platform.getHomeDir(allocator) catch null;
     defer if (home_dir) |h| allocator.free(h);
     const community_base = if (home_dir) |h|
-        std.fs.path.join(allocator, &.{ h, ".nullclaw", "skills" }) catch null
+        std.fs.path.join(allocator, &.{ h, ".nullclaw" }) catch null
     else
         null;
     defer if (community_base) |cb| allocator.free(cb);
