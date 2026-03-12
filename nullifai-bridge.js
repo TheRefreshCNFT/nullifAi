@@ -21,7 +21,10 @@ const path = require("path");
 
 // ── Config ──────────────────────────────────────────────────────────────
 const NULLCLAW_EXE = process.env.NULLCLAW_EXE || "C:\\Tools\\nullclaw\\2026.3.4\\nullclaw.exe";
-const NULLCLAW_CONFIG = process.env.NULLCLAW_CONFIG || path.join(require("os").homedir(), ".nullclaw", "config.json");
+// Root config is for gateway/Discord — DO NOT modify it from the bridge
+const NULLCLAW_CONFIG_ROOT = process.env.NULLCLAW_CONFIG || path.join(require("os").homedir(), ".nullclaw", "config.json");
+// Workspace config is for local UI agent sessions only
+const NULLCLAW_CONFIG = process.env.NULLCLAW_WORKSPACE_CONFIG || path.join(require("os").homedir(), ".nullclaw", "workspace", ".nullclaw", "config.json");
 const WS_PORT = parseInt(process.env.WS_PORT || "32123", 10);
 const UI_PORT = parseInt(process.env.UI_PORT || "4173", 10);
 const UI_DIR = process.env.UI_DIR || path.join(__dirname, "nullclaw-chat-ui", "build");
@@ -75,16 +78,35 @@ function sendEvent(ws, type, sessionId, payload, extra = {}) {
 
 // ── Persistent agent sessions (one process per session) ──────────────────
 const agentSessions = new Map(); // sessionId -> { child, ws, phase, ... }
-const AGENT_SETUP_CMDS = ["/think high", "/reason on"];
+const AGENT_SETUP_CMDS = ["/think high", "/reason on", "/exec security=full"];
 
-function getOrCreateAgent(sessionId, ws) {
+// Track which model is active per session (default = from config)
+const sessionModels = new Map(); // sessionId -> modelString
+
+function readDefaultModel() {
+  try {
+    const raw = require("fs").readFileSync(NULLCLAW_CONFIG, "utf-8");
+    const cfg = JSON.parse(raw);
+    return (cfg.agents && cfg.agents.defaults && cfg.agents.defaults.model && cfg.agents.defaults.model.primary) || null;
+  } catch { return null; }
+}
+
+function getOrCreateAgent(sessionId, ws, modelOverride) {
   if (agentSessions.has(sessionId)) {
     const sess = agentSessions.get(sessionId);
     sess.ws = ws;
     return sess;
   }
 
-  const child = spawn(NULLCLAW_EXE, ["agent", "-s", sessionId], {
+  const model = modelOverride || sessionModels.get(sessionId) || readDefaultModel();
+  if (model) { sessionModels.set(sessionId, model); }
+
+  // Do NOT pass --model flag — nullclaw reads from config naturally and handles
+  // provider prefix stripping correctly. We write the model to config before spawning.
+  const spawnArgs = ["agent", "-s", sessionId];
+
+  console.log(`  [agent ${sessionId}] spawning (model from config: ${model || "default"})`);
+  const child = spawn(NULLCLAW_EXE, spawnArgs, {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -170,8 +192,9 @@ function getOrCreateAgent(sessionId, ws) {
     }
 
     // Reset idle timer — each data chunk resets the clock
+    // 2000ms gives large models (480b-cloud) time to fully load before we treat them as ready
     if (sess.idleTimer) clearTimeout(sess.idleTimer);
-    sess.idleTimer = setTimeout(onIdle, 300);
+    sess.idleTimer = setTimeout(onIdle, 2000);
   });
 
   child.stderr.on("data", (data) => {
@@ -201,7 +224,44 @@ function getOrCreateAgent(sessionId, ws) {
   return sess;
 }
 
+function killAgentSession(sessionId) {
+  if (agentSessions.has(sessionId)) {
+    const sess = agentSessions.get(sessionId);
+    if (sess.idleTimer) clearTimeout(sess.idleTimer);
+    try { sess.child.kill(); } catch {}
+    agentSessions.delete(sessionId);
+  }
+  activeAgents.delete(sessionId);
+}
+
 function runAgent(sessionId, content, ws) {
+  // ── /model <name> interception ────────────────────────────────────
+  // Detect model-switch command before routing to agent stdin.
+  // Kill the existing session and respawn with the new model.
+  const modelSwitchMatch = content.trim().match(/^\/model\s+(\S+)/i);
+  if (modelSwitchMatch) {
+    const newModel = modelSwitchMatch[1];
+    console.log(`  [agent ${sessionId}] /model switch → ${newModel}`);
+    killAgentSession(sessionId);
+    sessionModels.set(sessionId, newModel);
+    // Update config.json default model too so it persists
+    try {
+      const raw = require("fs").readFileSync(NULLCLAW_CONFIG, "utf-8");
+      const cfg = JSON.parse(raw);
+      if (!cfg.agents) cfg.agents = {};
+      if (!cfg.agents.defaults) cfg.agents.defaults = {};
+      if (!cfg.agents.defaults.model) cfg.agents.defaults.model = {};
+      cfg.agents.defaults.model.primary = newModel;
+      require("fs").writeFileSync(NULLCLAW_CONFIG, JSON.stringify(cfg, null, 2) + "\n");
+      console.log(`  [config] Updated default model → ${newModel}`);
+    } catch (e) { console.error(`  [config] Failed to update model in config: ${e.message}`); }
+    // Notify UI
+    sendEvent(ws, "assistant_final", sessionId, {
+      content: `✓ Model switched to **${newModel}**. Next message will use the new model.`
+    });
+    return;
+  }
+
   const sess = getOrCreateAgent(sessionId, ws);
   activeAgents.set(sessionId, sess.child);
 
@@ -836,12 +896,13 @@ const INJECTED_SCRIPT = `
             { label: '/elevated', desc: 'Elevated mode', action: '/elevated', send: true },
             { label: '/context', desc: 'Context settings', action: '/context', send: true }
           ]},
-          { label: 'Gateway Config (all channels)', items: [
-            { label: 'File Access: Everywhere', desc: 'allowed_paths=["*"] — read files anywhere', configKey: 'autonomy.allowed_paths', configValues: [["*"], []], configLabels: ['Everywhere', 'Workspace Only'], toggle: true },
-            { label: 'Shell: No Approval', desc: 'Skip approval for medium-risk commands', configKey: 'autonomy.require_approval_for_medium_risk', configValues: [false, true], configLabels: ['No Approval', 'Require Approval'], toggle: true },
-            { label: 'High-Risk Commands: Allowed', desc: 'Allow destructive shell commands', configKey: 'autonomy.block_high_risk_commands', configValues: [false, true], configLabels: ['Allowed', 'Blocked'], toggle: true },
-            { label: 'Autonomy: Full', desc: 'Agent autonomy level', configKey: 'autonomy.level', configValues: ['full', 'supervised', 'read_only'], configLabels: ['Full', 'Supervised', 'Read-Only'], toggle: true },
-            { label: '\u21BB Restart Gateway', desc: 'Apply config changes to Discord & all channels', configAction: 'restart-gateway' }
+          { label: 'Config Toggles (local UI + all channels)', items: [
+            { label: 'File Access: Everywhere', desc: 'autonomy.workspace_only=false — read files anywhere on the system', configKey: 'autonomy.workspace_only', configValues: [false, true], configLabels: ['Everywhere \u2713', 'Workspace Only'], toggle: true },
+            { label: 'Shell: No Approval', desc: 'Skip approval for medium-risk commands', configKey: 'autonomy.require_approval_for_medium_risk', configValues: [false, true], configLabels: ['No Approval \u2713', 'Require Approval'], toggle: true },
+            { label: 'High-Risk Commands: Allowed', desc: 'Allow destructive shell commands', configKey: 'autonomy.block_high_risk_commands', configValues: [false, true], configLabels: ['Allowed \u2713', 'Blocked'], toggle: true },
+            { label: 'Autonomy: Full', desc: 'Agent autonomy level', configKey: 'autonomy.level', configValues: ['full', 'supervised', 'read_only'], configLabels: ['Full \u2713', 'Supervised', 'Read-Only'], toggle: true },
+            { label: '\u21BB Reset Local Sessions', desc: 'Kill all local agent sessions so they reload with updated config (local UI only, Discord unaffected)', configAction: 'reset-sessions' },
+            { label: '\u21BB Restart Gateway', desc: 'Apply config changes to Discord & all other channels (does NOT affect local UI sessions)', configAction: 'restart-gateway' }
           ]}
         ]
       },
@@ -952,14 +1013,23 @@ const INJECTED_SCRIPT = `
               }
             });
         }
-        // Gateway restart button
+        // Config action buttons (restart-gateway, reset-sessions)
         var restartPill = e.target.closest('[data-config-restart]');
         if (restartPill) {
-          restartPill.textContent = 'Restarting...';
-          restartPill.classList.add('dim');
-          fetch('/api/gateway/restart', { method: 'POST' }).then(function() {
-            setTimeout(function() { restartPill.textContent = '\u21BB Restart Gateway'; restartPill.classList.remove('dim'); }, 5000);
-          });
+          var action = restartPill.getAttribute('data-config-restart');
+          if (action === 'reset-sessions') {
+            restartPill.textContent = 'Resetting sessions...';
+            restartPill.classList.add('dim');
+            fetch('/api/reset-sessions', { method: 'POST' }).then(function() {
+              setTimeout(function() { restartPill.textContent = '\u21BB Reset Local Sessions'; restartPill.classList.remove('dim'); }, 3000);
+            });
+          } else {
+            restartPill.textContent = 'Restarting...';
+            restartPill.classList.add('dim');
+            fetch('/api/gateway/restart', { method: 'POST' }).then(function() {
+              setTimeout(function() { restartPill.textContent = '\u21BB Restart Gateway'; restartPill.classList.remove('dim'); }, 5000);
+            });
+          }
         }
       });
     },
@@ -1013,9 +1083,9 @@ const INJECTED_SCRIPT = `
             return '<button class="nai-cust-pill active" id="' + id + '" data-config-key="' + escapeHtml(it.configKey) + '" data-config-values="' + escapeHtml(JSON.stringify(it.configValues)) + '" data-config-labels="' + escapeHtml(JSON.stringify(it.configLabels)) + '" data-config-idx="0" title="' + escapeHtml(it.desc) + '">'
               + escapeHtml(it.configLabels[0]) + '</button>';
           }
-          // Gateway restart button
-          if (it.configAction === 'restart-gateway') {
-            return '<button class="nai-cust-pill" data-config-restart="true" title="' + escapeHtml(it.desc) + '">'
+          // Config action buttons (restart-gateway, reset-sessions, etc.)
+          if (it.configAction) {
+            return '<button class="nai-cust-pill" data-config-restart="' + escapeHtml(it.configAction) + '" title="' + escapeHtml(it.desc) + '">'
               + escapeHtml(it.label) + '</button>';
           }
           // Normal pill
@@ -1081,18 +1151,20 @@ const INJECTED_SCRIPT = `
           content.innerHTML = '<div class="nai-empty-sidebar" style="width:100%;">No models found. Is Ollama running?</div>';
           return;
         }
-        var activeModel = 'qwen3-coder:480b-cloud';
+        var activeModel = data.activeModel || '';
         var html = data.models.map(function(m) {
           var name = m.name;
           var size = m.size ? (m.size / 1e9).toFixed(1) + 'GB' : '';
           var isActive = name === activeModel ? ' active' : '';
-          var label = name + (size && size !== '0.0GB' ? ' (' + size + ')' : '');
-          return '<button class="nai-cust-pill' + isActive + '" data-action="Switch to the ' + name + ' model" title="' + (isActive ? 'Currently active' : 'Click to switch') + '">'
-            + escapeHtml(label) + (isActive ? ' \u2713' : '') + '</button>';
+          var displayLabel = m.label || name;
+          if (size && size !== '0.0GB') displayLabel += ' (' + size + ')';
+          var badge = m.provider && m.provider !== 'ollama' ? ' [' + escapeHtml(m.provider) + ']' : '';
+          return '<button class="nai-cust-pill' + isActive + '" data-action="/model ' + escapeHtml(name) + '" data-send title="' + escapeHtml(isActive ? 'Currently active' : 'Click to switch to ' + name) + '">'
+            + escapeHtml(displayLabel) + badge + (isActive ? ' \u2713' : '') + '</button>';
         }).join('');
         content.innerHTML = html;
       }).catch(function() {
-        content.innerHTML = '<div class="nai-empty-sidebar" style="width:100%;">Failed to load models. Check Ollama.</div>';
+        content.innerHTML = '<div class="nai-empty-sidebar" style="width:100%;">Failed to load models.</div>';
       });
     }
   };
@@ -1817,13 +1889,44 @@ const uiServer = http.createServer(async (req, res) => {
 
   if (req.url === "/api/models" && req.method === "GET") {
     try {
-      const tagResp = await fetch("http://127.0.0.1:11434/api/tags");
-      const data = await tagResp.json();
+      const activeModel = readDefaultModel();
+      let ollamaModels = [];
+      try {
+        const tagResp = await fetch("http://127.0.0.1:11434/api/tags");
+        const data = await tagResp.json();
+        ollamaModels = (data.models || []).map(m => ({
+          name: "ollama/" + m.name,
+          size: m.size,
+          provider: "ollama"
+        }));
+      } catch {}
+
+      // Cloud models from config providers
+      const cloudModels = [];
+      try {
+        const raw = require("fs").readFileSync(NULLCLAW_CONFIG, "utf-8");
+        const cfg = JSON.parse(raw);
+        const providers = (cfg.models && cfg.models.providers) || {};
+        if (providers.xai && providers.xai.api_key) {
+          cloudModels.push({ name: "xai/grok-4-1-fast-non-reasoning", provider: "xai", label: "Grok 4.1 Fast" });
+          cloudModels.push({ name: "xai/grok-4-1-fast-reasoning", provider: "xai", label: "Grok 4.1 Fast Reasoning" });
+        }
+        if (providers.anthropic && providers.anthropic.api_key) {
+          cloudModels.push({ name: "anthropic/claude-sonnet-4-6", provider: "anthropic", label: "Claude Sonnet 4.6" });
+          cloudModels.push({ name: "anthropic/claude-haiku-4-5", provider: "anthropic", label: "Claude Haiku 4.5" });
+        }
+        if (providers.gemini && providers.gemini.api_key) {
+          cloudModels.push({ name: "gemini/gemini-2.5-pro", provider: "gemini", label: "Gemini 2.5 Pro" });
+          cloudModels.push({ name: "gemini/gemini-2.5-flash", provider: "gemini", label: "Gemini 2.5 Flash" });
+        }
+      } catch {}
+
+      const allModels = [...cloudModels, ...ollamaModels];
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(data));
+      res.end(JSON.stringify({ models: allModels, activeModel }));
     } catch (err) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ models: [], error: err.message }));
+      res.end(JSON.stringify({ models: [], activeModel: readDefaultModel(), error: err.message }));
     }
     return;
   }
@@ -1868,6 +1971,22 @@ const uiServer = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ ok: false, error: err.message }));
       }
     });
+    return;
+  }
+
+  if (req.url === "/api/reset-sessions" && req.method === "POST") {
+    console.log("[api] Reset all local agent sessions requested");
+    let count = 0;
+    for (const [sid] of agentSessions) {
+      killAgentSession(sid);
+      count++;
+    }
+    agentSessions.clear();
+    activeAgents.clear();
+    sessions.clear();
+    console.log(`[api] Killed ${count} local agent session(s). New sessions will use updated config.`);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, message: `Reset ${count} session(s). Re-pair to start fresh.` }));
     return;
   }
 
