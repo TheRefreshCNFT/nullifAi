@@ -120,6 +120,8 @@ pub const Config = struct {
     model_routes: []const ModelRouteConfig = &.{},
     agents: []const NamedAgentConfig = &.{},
     agent_bindings: []const @import("agent_routing.zig").AgentBinding = &.{},
+    /// Runtime-only flag used by live `/bind` updates.
+    agent_bindings_runtime_owned: bool = false,
     mcp_servers: []const McpServerConfig = &.{},
 
     // Nested sub-configs
@@ -3531,7 +3533,7 @@ test "tools.media.audio disabled" {
 test "parse telegram accounts" {
     const allocator = std.testing.allocator;
     const json =
-        \\{"channels": {"telegram": {"accounts": {"main": {"bot_token": "123:ABC", "allow_from": ["user1"], "reply_in_private": false, "proxy": "socks5://host:1080", "status_reactions": true, "topic_commands_enabled": false, "topic_map_command_enabled": false, "commands_menu_mode": "scoped", "reaction_emojis": {"accepted": "🟡", "running": "🔵", "done": "🟢", "failed": "🔴"}, "interactive": {"enabled": true, "ttl_secs": 42, "owner_only": false, "remove_on_click": false}}}}}}
+        \\{"channels": {"telegram": {"accounts": {"main": {"bot_token": "123:ABC", "allow_from": ["user1"], "reply_in_private": false, "proxy": "socks5://host:1080", "status_reactions": true, "binding_commands_enabled": false, "topic_commands_enabled": false, "topic_map_command_enabled": false, "commands_menu_mode": "scoped", "reaction_emojis": {"accepted": "🟡", "running": "🔵", "done": "🟢", "failed": "🔴"}, "interactive": {"enabled": true, "ttl_secs": 42, "owner_only": false, "remove_on_click": false}}}}}}
     ;
     var cfg = Config{ .workspace_dir = "/tmp/yc", .config_path = "/tmp/yc/config.json", .allocator = allocator };
     try cfg.parseJson(json);
@@ -3544,6 +3546,7 @@ test "parse telegram accounts" {
     try std.testing.expect(!tg.reply_in_private);
     try std.testing.expectEqualStrings("socks5://host:1080", tg.proxy.?);
     try std.testing.expect(tg.status_reactions);
+    try std.testing.expect(!tg.binding_commands_enabled);
     try std.testing.expect(!tg.topic_commands_enabled);
     try std.testing.expect(!tg.topic_map_command_enabled);
     try std.testing.expect(tg.commands_menu_mode == .scoped);
@@ -3576,6 +3579,7 @@ test "parse telegram accounts interactive defaults when omitted" {
     try cfg.parseJson(json);
     try std.testing.expectEqual(@as(usize, 1), cfg.channels.telegram.len);
     try std.testing.expect(!cfg.channels.telegram[0].status_reactions);
+    try std.testing.expect(cfg.channels.telegram[0].binding_commands_enabled);
     try std.testing.expect(cfg.channels.telegram[0].topic_commands_enabled);
     try std.testing.expect(cfg.channels.telegram[0].topic_map_command_enabled);
     try std.testing.expect(cfg.channels.telegram[0].commands_menu_mode == .flat);

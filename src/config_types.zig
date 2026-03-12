@@ -292,6 +292,8 @@ pub const TelegramConfig = struct {
     status_reactions: bool = false,
     /// Per-state reaction emoji overrides. Empty string clears the reaction for that state.
     reaction_emojis: TelegramReactionEmojisConfig = .{},
+    /// Enable Telegram-specific binding commands such as /bind.
+    binding_commands_enabled: bool = true,
     /// Enable Telegram-specific topic management commands such as /topic.
     topic_commands_enabled: bool = true,
     /// Enable Telegram-specific topic/session map command such as /topics.

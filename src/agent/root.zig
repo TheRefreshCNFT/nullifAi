@@ -244,6 +244,8 @@ pub const Agent = struct {
     default_provider: []const u8 = "openrouter",
     default_provider_owned: bool = false,
     default_model: []const u8 = "anthropic/claude-sonnet-4",
+    profile_name: ?[]const u8 = null,
+    profile_system_prompt: ?[]const u8 = null,
     model_routes: []const config_types.ModelRouteConfig = &.{},
     model_pinned_by_user: bool = false,
     last_route_trace: ?[]u8 = null,
@@ -388,7 +390,26 @@ pub const Agent = struct {
         mem: ?Memory,
         observer_i: Observer,
     ) !Agent {
-        const default_model = cfg.default_model orelse return error.NoDefaultModel;
+        return fromConfigWithProfile(allocator, cfg, provider_i, tools, mem, observer_i, null);
+    }
+
+    pub fn fromConfigWithProfile(
+        allocator: std.mem.Allocator,
+        cfg: *const Config,
+        provider_i: Provider,
+        tools: []const Tool,
+        mem: ?Memory,
+        observer_i: Observer,
+        profile: ?config_types.NamedAgentConfig,
+    ) !Agent {
+        const default_model = if (profile) |agent_profile|
+            agent_profile.model
+        else
+            cfg.default_model orelse return error.NoDefaultModel;
+        const default_provider = if (profile) |agent_profile|
+            agent_profile.provider
+        else
+            cfg.default_provider;
         const token_limit_override = if (cfg.agent.token_limit_explicit) cfg.agent.token_limit else null;
         const resolved_token_limit = context_tokens.resolveContextTokens(token_limit_override, default_model);
         const resolved_max_tokens_raw = max_tokens_resolver.resolveMaxTokens(cfg.max_tokens, default_model);
@@ -430,13 +451,15 @@ pub const Agent = struct {
             .bootstrap = bootstrap_provider,
             .observer = observer_i,
             .model_name = default_model,
-            .default_provider = cfg.default_provider,
+            .default_provider = default_provider,
             .default_model = default_model,
-            .model_routes = cfg.model_routes,
+            .profile_name = if (profile) |agent_profile| agent_profile.name else null,
+            .profile_system_prompt = if (profile) |agent_profile| agent_profile.system_prompt else null,
+            .model_routes = if (profile != null) &.{} else cfg.model_routes,
             .configured_providers = cfg.providers,
             .fallback_providers = cfg.reliability.fallback_providers,
             .model_fallbacks = cfg.reliability.model_fallbacks,
-            .temperature = cfg.default_temperature,
+            .temperature = if (profile) |agent_profile| agent_profile.temperature orelse cfg.default_temperature else cfg.default_temperature,
             .workspace_dir = cfg.workspace_dir,
             .allowed_paths = cfg.autonomy.allowed_paths,
             .multimodal_unrestricted = cfg.autonomy.level == .yolo,
@@ -1551,6 +1574,21 @@ pub const Agent = struct {
                 .conversation_context = self.conversation_context,
                 .bootstrap_provider = self.bootstrap,
             });
+            const final_system = if (self.profile_system_prompt) |profile_prompt|
+                if (profile_prompt.len > 0) blk: {
+                    defer self.allocator.free(full_system);
+                    break :blk try std.fmt.allocPrint(
+                        self.allocator,
+                        "## Agent Profile\n\nProfile: {s}\n\n{s}\n\n{s}",
+                        .{
+                            self.profile_name orelse "custom",
+                            profile_prompt,
+                            full_system,
+                        },
+                    );
+                } else full_system
+            else
+                full_system;
 
             // Keep exactly one canonical system prompt at history[0].
             // This allows /model to invalidate and refresh the prompt in place.
@@ -1558,17 +1596,17 @@ pub const Agent = struct {
                 self.history.items[0].deinit(self.allocator);
                 self.history.items[0] = .{
                     .role = .system,
-                    .content = full_system,
+                    .content = final_system,
                 };
             } else if (self.history.items.len > 0) {
                 try self.history.insert(self.allocator, 0, .{
                     .role = .system,
-                    .content = full_system,
+                    .content = final_system,
                 });
             } else {
                 try self.history.append(self.allocator, .{
                     .role = .system,
-                    .content = full_system,
+                    .content = final_system,
                 });
             }
             self.has_system_prompt = true;
@@ -3555,6 +3593,113 @@ test "Agent.fromConfig keeps explicit token_limit override" {
 
     try std.testing.expectEqual(@as(u64, 64_000), agent.token_limit);
     try std.testing.expectEqual(@as(?u64, 64_000), agent.token_limit_override);
+}
+
+test "Agent.fromConfigWithProfile applies named profile defaults" {
+    const allocator = std.testing.allocator;
+    var cfg = Config{
+        .workspace_dir = "/tmp/yc",
+        .config_path = "/tmp/yc/config.json",
+        .default_provider = "openrouter",
+        .default_model = "openrouter/default-model",
+        .allocator = allocator,
+        .model_routes = &.{
+            .{ .hint = "fast", .provider = "groq", .model = "llama-3.3-8b" },
+        },
+    };
+
+    const profile = config_types.NamedAgentConfig{
+        .name = "coder",
+        .provider = "ollama",
+        .model = "qwen2.5-coder:14b",
+        .system_prompt = "You are a coding specialist.",
+        .temperature = 0.2,
+    };
+
+    var noop = observability.NoopObserver{};
+    var agent = try Agent.fromConfigWithProfile(allocator, &cfg, undefined, &.{}, null, noop.observer(), profile);
+    defer agent.deinit();
+
+    try std.testing.expectEqualStrings("qwen2.5-coder:14b", agent.model_name);
+    try std.testing.expectEqualStrings("ollama", agent.default_provider);
+    try std.testing.expectEqualStrings("qwen2.5-coder:14b", agent.default_model);
+    try std.testing.expectEqualStrings("coder", agent.profile_name.?);
+    try std.testing.expectEqualStrings("You are a coding specialist.", agent.profile_system_prompt.?);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.2), agent.temperature, 0.000001);
+    try std.testing.expectEqual(@as(usize, 0), agent.model_routes.len);
+}
+
+test "turn prepends profile system prompt when profile is active" {
+    const CaptureProvider = struct {
+        captured_system: ?[]const u8 = null,
+
+        fn chatWithSystem(_: *anyopaque, allocator: std.mem.Allocator, _: ?[]const u8, _: []const u8, _: []const u8, _: f64) anyerror![]const u8 {
+            return allocator.dupe(u8, "");
+        }
+
+        fn chat(ptr: *anyopaque, allocator: std.mem.Allocator, request: providers.ChatRequest, model: []const u8, _: f64) anyerror!providers.ChatResponse {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            if (request.messages.len > 0 and request.messages[0].role == .system) {
+                self.captured_system = request.messages[0].content;
+            }
+            return .{
+                .content = try allocator.dupe(u8, "ok"),
+                .tool_calls = &.{},
+                .usage = .{},
+                .model = try allocator.dupe(u8, model),
+            };
+        }
+
+        fn supportsNativeTools(_: *anyopaque) bool {
+            return false;
+        }
+
+        fn getName(_: *anyopaque) []const u8 {
+            return "capture-profile-provider";
+        }
+
+        fn deinitFn(_: *anyopaque) void {}
+    };
+
+    const allocator = std.testing.allocator;
+    const provider_vtable = Provider.VTable{
+        .chatWithSystem = CaptureProvider.chatWithSystem,
+        .chat = CaptureProvider.chat,
+        .supportsNativeTools = CaptureProvider.supportsNativeTools,
+        .getName = CaptureProvider.getName,
+        .deinit = CaptureProvider.deinitFn,
+    };
+    var provider_state = CaptureProvider{};
+    const provider = Provider{
+        .ptr = @ptrCast(&provider_state),
+        .vtable = &provider_vtable,
+    };
+
+    var cfg = Config{
+        .workspace_dir = "/tmp/yc",
+        .config_path = "/tmp/yc/config.json",
+        .default_provider = "openrouter",
+        .default_model = "openrouter/default-model",
+        .allocator = allocator,
+    };
+    const profile = config_types.NamedAgentConfig{
+        .name = "coder",
+        .provider = "openrouter",
+        .model = "openrouter/coder-model",
+        .system_prompt = "You are a coding specialist.",
+    };
+
+    var noop = observability.NoopObserver{};
+    var agent = try Agent.fromConfigWithProfile(allocator, &cfg, provider, &.{}, null, noop.observer(), profile);
+    defer agent.deinit();
+
+    const response = try agent.turn("hello");
+    defer allocator.free(response);
+
+    try std.testing.expectEqualStrings("ok", response);
+    try std.testing.expect(provider_state.captured_system != null);
+    try std.testing.expect(std.mem.indexOf(u8, provider_state.captured_system.?, "You are a coding specialist.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, provider_state.captured_system.?, "Profile: coder") != null);
 }
 
 test "Agent.fromConfig resolves max_tokens from provider lookup when unset" {

@@ -510,6 +510,7 @@ pub const TelegramChannel = struct {
     streaming_enabled: bool = true,
     status_reactions_enabled: bool = false,
     reaction_emojis: config_types.TelegramReactionEmojisConfig = .{},
+    binding_commands_enabled: bool = true,
     topic_commands_enabled: bool = true,
     topic_map_command_enabled: bool = true,
     commands_menu_mode: config_types.TelegramCommandsMenuMode = .flat,
@@ -570,6 +571,7 @@ pub const TelegramChannel = struct {
         ch.streaming_enabled = cfg.streaming;
         ch.status_reactions_enabled = cfg.status_reactions;
         ch.reaction_emojis = cfg.reaction_emojis;
+        ch.binding_commands_enabled = cfg.binding_commands_enabled;
         ch.topic_commands_enabled = cfg.topic_commands_enabled;
         ch.topic_map_command_enabled = cfg.topic_map_command_enabled;
         ch.commands_menu_mode = cfg.commands_menu_mode;
@@ -812,11 +814,13 @@ pub const TelegramChannel = struct {
     fn setMyCommandsForScope(
         self: *TelegramChannel,
         scope: control_plane.TelegramBotCommandScope,
+        include_bind_command: bool,
         include_topic_command: bool,
         include_topics_command: bool,
     ) !void {
         const commands_json = try control_plane.buildTelegramBotCommandsJson(self.allocator, .{
             .scope = scope,
+            .include_bind_command = include_bind_command,
             .include_topic_command = include_topic_command,
             .include_topics_command = include_topics_command,
         });
@@ -845,7 +849,7 @@ pub const TelegramChannel = struct {
                 };
             },
             .flat => {
-                self.setMyCommandsForScope(.default, self.topic_commands_enabled, self.topic_map_command_enabled) catch |err| {
+                self.setMyCommandsForScope(.default, self.binding_commands_enabled, self.topic_commands_enabled, self.topic_map_command_enabled) catch |err| {
                     log.warn("setMyCommands(default) failed: {}", .{err});
                 };
                 self.deleteMyCommandsForScope(.all_private_chats) catch |err| {
@@ -856,10 +860,10 @@ pub const TelegramChannel = struct {
                 };
             },
             .scoped => {
-                self.setMyCommandsForScope(.all_private_chats, false, false) catch |err| {
+                self.setMyCommandsForScope(.all_private_chats, self.binding_commands_enabled, false, false) catch |err| {
                     log.warn("setMyCommands(all_private_chats) failed: {}", .{err});
                 };
-                self.setMyCommandsForScope(.all_group_chats, self.topic_commands_enabled, self.topic_map_command_enabled) catch |err| {
+                self.setMyCommandsForScope(.all_group_chats, self.binding_commands_enabled, self.topic_commands_enabled, self.topic_map_command_enabled) catch |err| {
                     log.warn("setMyCommands(all_group_chats) failed: {}", .{err});
                 };
                 self.deleteMyCommandsForScope(.default) catch |err| {

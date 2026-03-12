@@ -539,6 +539,26 @@ fn resolveInboundRouteSessionKeyWithMetadata(
         }, meta) orelse return null
     else
         return null;
+
+    if (std.mem.eql(u8, msg.channel, "telegram") and
+        peer.kind == .group and
+        meta.thread_id != null)
+    {
+        const topic_peer_id = std.fmt.allocPrint(allocator, "{s}:thread:{s}", .{ peer.id, meta.thread_id.? }) catch return null;
+        defer allocator.free(topic_peer_id);
+
+        const route = agent_routing.resolveRouteWithSession(allocator, .{
+            .channel = msg.channel,
+            .account_id = account_id,
+            .peer = .{ .kind = peer.kind, .id = topic_peer_id },
+            .parent_peer = peer,
+            .guild_id = meta.guild_id,
+            .team_id = meta.team_id,
+        }, config.agent_bindings, config.agents, config.session) catch return null;
+        allocator.free(route.main_session_key);
+        return route.session_key;
+    }
+
     const route = agent_routing.resolveRouteWithSession(allocator, .{
         .channel = msg.channel,
         .account_id = account_id,
@@ -1760,6 +1780,47 @@ test "resolveInboundRouteSessionKey supports standardized peer metadata for unkn
     try std.testing.expect(routed != null);
     defer allocator.free(routed.?);
     try std.testing.expectEqualStrings("agent:custom-agent:custom:direct:user-7", routed.?);
+}
+
+test "resolveInboundRouteSessionKey uses telegram thread metadata for topic routing" {
+    const allocator = std.testing.allocator;
+    const bindings = [_]agent_routing.AgentBinding{
+        .{
+            .agent_id = "tg-topic-agent",
+            .match = .{
+                .channel = "telegram",
+                .account_id = "main",
+                .peer = .{ .kind = .group, .id = "-100123:thread:42" },
+            },
+        },
+        .{
+            .agent_id = "tg-group-agent",
+            .match = .{
+                .channel = "telegram",
+                .account_id = "main",
+                .peer = .{ .kind = .group, .id = "-100123" },
+            },
+        },
+    };
+    const config = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = allocator,
+        .agent_bindings = &bindings,
+    };
+    const msg = bus_mod.InboundMessage{
+        .channel = "telegram",
+        .sender_id = "user-1",
+        .chat_id = "-100123#topic:42",
+        .content = "hello",
+        .session_key = "telegram:-100123#topic:42",
+        .metadata_json = "{\"account_id\":\"main\",\"peer_kind\":\"group\",\"peer_id\":\"-100123\",\"thread_id\":\"42\"}",
+    };
+
+    const routed = resolveInboundRouteSessionKey(allocator, &config, &msg);
+    try std.testing.expect(routed != null);
+    defer allocator.free(routed.?);
+    try std.testing.expectEqualStrings("agent:tg-topic-agent:telegram:group:-100123:thread:42", routed.?);
 }
 
 test "parseInboundMetadata extracts message_id and thread_id" {
